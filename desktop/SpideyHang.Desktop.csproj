@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- Only for the tray icon (NotifyIcon). WPF has no tray support of its own. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <!-- Off on purpose: WPF and WinForms both define Application, Point, Brush, Color. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>SpideyHang</AssemblyName>
+    <RootNamespace>SpideyHang</RootNamespace>
+    <Product>Spidey Hang</Product>
+    <Version>0.9.0</Version>
+  </PropertyGroup>
+
+</Project>

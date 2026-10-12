@@ -1,0 +1,17 @@
+# Build output. scripts/build-vsix.py makes all of these again.
+bin/
+obj/
+dist/
+*.vsix
+
+# Personal hero pictures and settings, in case a copy lands in here by mistake.
+# They belong in %USERPROFILE%\.spidey-hang and must never be published.
+heroes/
+spidey-hang-personal/
+.spidey-hang/
+
+# Editor and OS clutter
+.vs/
+*.user
+Thumbs.db
+.DS_Store
