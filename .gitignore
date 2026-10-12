@@ -15,3 +15,11 @@ spidey-hang-personal/
 *.user
 Thumbs.db
 .DS_Store
+
+# Output of the test helpers in the README (frame.png, frame.png.log, strip.png, figure.png).
+frame.png
+frame.png.log
+strip.png
+figure.png
+
+node_modules/

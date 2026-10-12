@@ -1,0 +1,7 @@
+# Store text files with LF in the repository. Checkouts use each platform's own line endings.
+* text=auto
+
+*.png binary
+*.exe binary
+*.dll binary
+*.vsix binary

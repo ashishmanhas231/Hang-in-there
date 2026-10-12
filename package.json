@@ -5,6 +5,15 @@
   "version": "0.9.0",
   "publisher": "local",
   "license": "MIT",
+  "author": "Ashish Manhas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ashishmanhas231/Hang-in-there.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ashishmanhas231/Hang-in-there/issues"
+  },
+  "homepage": "https://github.com/ashishmanhas231/Hang-in-there#readme",
   "engines": {
     "vscode": "^1.80.0"
   },

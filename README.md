@@ -205,10 +205,18 @@ The exe takes the same commands on the command line: `--push [n]`, `--reset`, `-
 
 ## Build and install
 
+Needs Windows, the .NET 10 SDK, Python 3 and VS Code.
+
 ```bash
 python scripts/build-vsix.py
 code --install-extension dist/spidey-hang-0.9.0.vsix --force
 ```
+
+The script runs `dotnet publish` for the desktop app first, then packs the `.vsix`. Reload VS Code
+afterwards.
+
+On GitHub, every push builds the `.vsix` with GitHub Actions and keeps it as a build artifact.
+Pushing a tag such as `v0.9.0` also attaches it to a release.
 
 Test helpers (nothing appears on screen):
 
@@ -222,17 +230,14 @@ bin/SpideyHang.exe --snapshot frame.png 20 0.8 - - swing
 Each snapshot also writes `frame.png.log`: motion, rope angle, how far his body leans off the
 rope, and rope stretch over time.
 
-Then reload VS Code. The script runs `dotnet publish` for the desktop app first.
+## Artwork
 
-## About Hangly's own assets
+This repository contains no third-party artwork, and neither does the `.vsix`. Spider-Man is
+drawn by code (`desktop/SpideyArt.cs`).
 
-Hangly's NOTICE.md marks all its charm artwork "all rights reserved". None of it is in this
-project or its `.vsix`. Any Hangly pictures you choose to use stay in your own
-`%USERPROFILE%\.spidey-hang\heroes` folder, for your own PC. Do not share that folder.
-
-The same goes for the pose pictures of Iron Man, Hulk, Captain America and Thor. They are
-official Marvel film promo cut-outs, copied from the Marvel Cinematic Universe Wiki on Fandom for
-personal use. They live only in that folder, never in this project.
+Any hero pictures you add stay in your own `%USERPROFILE%\.spidey-hang\heroes` folder, for your own
+PC. Do not commit or share that folder. This includes pictures from Hangly, whose NOTICE.md marks
+all its charm artwork "all rights reserved".
 
 Hangly's ropes are drawn by code, not from pictures. This project follows the same idea in its own code.
 
