@@ -22,6 +22,8 @@
   const TONES = [SILK_DEEP, SILK_SHADE, WHITE, SILK_SHADE, SILK_DEEP].map((c) => rgba(c));
   const TWIST = rgba(SILK_DEEP, 120 / 255);
   const LINE_STYLES = ['web', 'none'];
+  /** The web he let go of fades out over this long (seconds). */
+  const LET_GO_SECONDS = 0.4;
 
   /**
    * A hero's pictures, loaded and sized. Asking for a pose he does not have gives the nearest one:
@@ -66,6 +68,12 @@
       this.dragging = false;
       /** How far between the last two physics steps to draw (0..1), so motion is smooth between steps. */
       this.blend = 1;
+      /** True while he swings across the screen: the swing pose throughout, never the resting one. */
+      this.travelling = false;
+      /** The web he just let go of, fading: { age, line } (window units), or null. */
+      this.letGo = null;
+      /** In the air, the new web on its way up (from travel.js): { x, y, share } in window units, or null. */
+      this.aim = null;
     }
 
     get look() {
@@ -85,7 +93,22 @@
     }
 
     get settled() {
-      return Math.abs(this.armOffset) < 0.002 && this.fade >= 1 && this.candidate === null;
+      return Math.abs(this.armOffset) < 0.002 && this.fade >= 1 && this.candidate === null &&
+        this.letGo === null && this.aim === null;
+    }
+
+    /** He has just let go of his web: it stays where it was and fades. Call right after rig.release(). */
+    letGoWeb() {
+      this.letGo = { age: 0, line: this.sampleRope() };
+    }
+
+    /** The window moved by -dx: keeps what the stage remembers in window units in place on screen. */
+    shiftBy(dx) {
+      if (this.letGo) {
+        for (const p of this.letGo.line) {
+          p.x += dx;
+        }
+      }
     }
 
     get line() {
@@ -127,6 +150,12 @@
       }
       this.prevTheta = theta;
       this.updatePose(frameDt);
+      if (this.letGo) {
+        this.letGo.age += frameDt;
+        if (this.letGo.age >= LET_GO_SECONDS) {
+          this.letGo = null;
+        }
+      }
     }
 
     updatePose(frameDt) {
@@ -142,7 +171,10 @@
       // the speed or angle hovers near one value.
       const flyFrom = this.poseName === 'fly' ? 0.6 : 0.75; // radians: about 34 and 43 degrees
       const swingFrom = this.poseName === 'swing' || this.poseName === 'fly' ? 90 : 150;
+      // Swinging across the screen he keeps one pose: the fly pose flicking on and off at the top of
+      // every swing, cross-fading each time, looked like a stutter.
       const wanted = this.dragging ? 'grab'
+        : this.travelling ? 'swing'
         : Math.abs(this.rig.ropeAngle) > flyFrom ? 'fly'
         : this.activity > swingFrom ? 'swing'
         : 'hang';
@@ -203,14 +235,19 @@
       if (this.rig.particles.length === 0) {
         return;
       }
-      const line = this.sampleRope();
+      this.drawLetGo(ctx);
+      // In the air he has no web: only the new one, if it is on its way up yet.
+      const free = this.rig.free;
+      const line = free ? this.aimLine() : this.sampleRope();
       // A picture held by a fist mid-body ("grip" in hero.json) has the web across the front of him,
       // as in the picture it came from; otherwise his body hides the web.
       const webInFront = Boolean(this.lookValue && this.shown && this.shown.gripped);
-      if (!webInFront) {
+      if (line && !webInFront) {
         this.drawLine(ctx, line);
       }
-      this.drawTopFitting(ctx);
+      if (!free) {
+        this.drawTopFitting(ctx);
+      }
 
       const theta = this.bodyAngle();
       const ankle = this.at(this.rig.ankle);
@@ -229,7 +266,9 @@
           this.shown.draw(ctx, 1);
         }
         ctx.restore();
-        this.drawEndFitting(ctx);
+        if (line) {
+          this.drawEndFitting(ctx);
+        }
       } else if (this.drawFigure) {
         ctx.rotate(theta);
         const scale = this.rig.bodyLength / 100;
@@ -237,7 +276,7 @@
         this.drawFigure(ctx, this.armOffset);
       }
       ctx.restore();
-      if (webInFront) {
+      if (line && webInFront) {
         this.drawLine(ctx, line);
       }
     }
@@ -252,10 +291,11 @@
       if (rig.particles.length === 0) {
         return false;
       }
-      if (Math.hypot(pt.x - rig.anchor.x, pt.y - rig.anchor.y * 0.6) < 18) {
+      // In the air the old web is not his any more: only he catches the mouse.
+      if (!rig.free && Math.hypot(pt.x - rig.anchor.x, pt.y - rig.anchor.y * 0.6) < 18) {
         return true;
       }
-      if (this.line !== 'none') {
+      if (this.line !== 'none' && !rig.free) {
         const reach = Math.max(5, this.ropeWidth * 2);
         for (let i = 0; i < rig.ropeCount - 1; i++) {
           if (segmentDistance(pt, rig.particles[i], rig.particles[i + 1]) < reach) {
@@ -343,6 +383,37 @@
     }
 
     // ---- Fittings at each end of the line ------------------------------------------------
+
+    /** In the air: the new web on its way from his hand to the top of the screen, or null. */
+    aimLine() {
+      const aim = this.aim;
+      if (!aim || aim.share <= 0) {
+        return null;
+      }
+      const hand = this.at(this.rig.ankle);
+      const tip = { x: hand.x + (aim.x - hand.x) * aim.share, y: hand.y + (aim.y - hand.y) * aim.share };
+      // Points all along it, as on a rope, so it gets the same twist marks and fibres.
+      const points = [];
+      for (let i = 0; i <= 16; i++) {
+        const t = i / 16;
+        points.push({ x: tip.x + (hand.x - tip.x) * t, y: tip.y + (hand.y - tip.y) * t });
+      }
+      return points;
+    }
+
+    /** The web he just let go of: left where it was, with its splat, fading out over LET_GO_SECONDS. */
+    drawLetGo(ctx) {
+      if (!this.letGo || this.line === 'none') {
+        return;
+      }
+      const { age, line } = this.letGo;
+      const t = Math.min(1, age / LET_GO_SECONDS);
+      ctx.save();
+      ctx.globalAlpha = (1 - t) * (1 - t);
+      this.drawLine(ctx, line);
+      drawSplat(ctx, line[0].x, line[0].y, this.ropeWidth);
+      ctx.restore();
+    }
 
     drawTopFitting(ctx) {
       if (this.line !== 'none') {

@@ -64,6 +64,20 @@ him moving, so they use that all the time.
 **Swing on his own** keeps a steady swing of about 30 degrees going, like pumping a playground swing.
 If you drop the web too close to a screen edge, it slides back in just far enough for a full swing.
 
+### Swinging across the screen
+
+**Double-click him** (or choose **Swing across the screen** in his menu) and he swings to the other
+side of the screen web to web, like Spider-Man between buildings. He leans back, swings forward, lets
+go on the way up and flies through the air; on the way down the next web shoots from his hand and
+catches him, and he swings straight on without losing speed. The trip is split into equal
+hops. The last web is tied at the same spot as **Position > Left** or **Right**, and he swings to a
+stop there. The new spot is remembered, so he starts there next time. Double-click again to swing back.
+
+- **Grab him** mid-swing to stop: he hangs from the web he has, and that spot is remembered instead.
+- With **Swing on his own** on, he stops far enough in from the edge to keep swinging.
+- With **Reduce motion** turned on in your system's accessibility settings, he glides across calmly
+  instead.
+
 Reminders (**Reminders** in the menu): "Time to drink some water" on every half hour, and "It's your
 lunch time" at 3:00 PM. They appear in a speech bubble just above his face, in every pose.
 
@@ -143,7 +157,8 @@ redirected to a private copy, and so does anything they start. The profile folde
 
 A running Spidey takes one-line text commands: `push [strength]`, `reset`, `swing on|off|toggle`,
 `hero <name>|next`, `rotate <minutes>`, `remind water|lunch|<text>`, `reminders` (opens the Reminders
-window), `snapshot <file.png>`, `stats` and `exit`. They travel over the named pipe `\\.\pipe\SpideyHang` on
+window), `travel` (swings across to the other side of the screen), `snapshot <file.png>`, `stats` and
+`exit`. They travel over the named pipe `\\.\pipe\SpideyHang` on
 Windows and the Unix socket `~/.spidey-hang/spidey.sock` on macOS, which only your own account can open.
 `snapshot` saves only what Spidey himself draws, never the screen behind it.
 

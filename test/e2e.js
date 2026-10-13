@@ -128,6 +128,15 @@ async function main() {
       assert.equal(logText().match(/Reminders window opened/g).length, 1);
     });
 
+    await check('swing across: web to web to the other side, and the new spot is saved', async () => {
+      const saved = () => JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).AnchorFraction;
+      const before = saved();
+      await ipc.send('travel');
+      await logHas(/Swinging across: web from \d+ to \d+/);
+      await logHas(/Swung across: web now at \d+/);
+      await waitFor('the new spot saved', () => Math.abs(saved() - before) > 0.3);
+    });
+
     await check('the drawing, hero rotation on and off, next hero, stats, reset', async () => {
       await ipc.send('hero Drawn Spider-Man');
       await logHas(/Look: drawn Spider-Man/);

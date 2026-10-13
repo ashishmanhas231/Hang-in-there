@@ -504,3 +504,174 @@ test('settings: custom reminders are saved, and broken ones in the file are drop
   fs.writeFileSync(path.join(process.env.SPIDEY_HANG_HOME, 'settings.json'), JSON.stringify(raw));
   assert.deepEqual(Settings.load().CustomReminders, []);
 });
+
+/**
+ * Sends Spidey from one side of a screen to the other, as the overlay does: laid out as main.js
+ * applyLayout does, the window centred on his hand while he swings, then on his web. Records what
+ * the eye would see, step by step.
+ */
+function swingAcross(screenW, screenH, body, ropeFraction, startFraction, push = 0) {
+  const { Travel } = require(path.join(D, 'renderer/shared/travel.js'));
+  const hang = body * 1.32;
+  const rope = Math.min(Math.max(60, ropeFraction * screenH), Math.max(60, screenH - hang - 30));
+  const reach = rope + hang;
+  const width = Math.round(2 * reach + 40);
+  let left = Math.round(screenW * startFraction - width / 2);
+  const rig = new Rig();
+  rig.random = () => 0.3;
+  rig.build(width, Math.round(Math.min(screenH, reach + 30)), screenW * startFraction - left, rope, body);
+  run(rig, 4);
+  if (push) {
+    rig.kick(push, 1);
+    run(rig, 0.4);
+  }
+  const plan = Travel.plan(screenW * startFraction, { x: 0, width: screenW });
+  const travel = new Travel(rig, plan.dir, plan.targetX, rope);
+  travel.begin(left);
+  const r = { plan, rope, catches: [], releases: [], maxStretch: 1, touched: false, bentSteps: 0, steps: 0,
+    slowest: Infinity, jolt: 0, spin: 0, spinJolt: 0, doneAt: null, highest: Infinity, longestWeb: 0 };
+  let t = 0;
+  let before = null;
+  while (t < 15) {
+    rig.simulate(t, false, false, null, null);
+    t += STEP;
+    const event = travel.step(left);
+    if (event && event.type === 'release') r.releases.push(t);
+    if (event && event.type === 'catch') {
+      r.catches.push({ ...event, t });
+      r.longestWeb = Math.max(r.longestWeb, rig.ropeLength);
+    }
+    if (travel.done && r.doneAt === null) r.doneAt = t;
+    const want = Math.round((travel.done ? left + rig.anchor.x : left + rig.ankle.x) - width / 2);
+    rig.shiftEverything(left - want);
+    left = want;
+    r.touched = r.touched || rig.touching;
+    r.highest = Math.min(r.highest, rig.ankle.y, rig.head.y);
+    if (travel.done) continue;
+    r.steps++;
+    if (!rig.free) {
+      r.maxStretch = Math.max(r.maxStretch, rig.ropeStretch);
+      if (rig.bodyOffRopeEnd() > Math.PI / 3) r.bentSteps++;
+    }
+    // What the eye sees: his hand's speed, how suddenly it changes, and how fast his body turns.
+    const now = {
+      vx: (rig.ankle.x - rig.ankle.px) / STEP,
+      vy: (rig.ankle.y - rig.ankle.py) / STEP,
+      spin: Math.atan2(Math.sin(rig.bodyAngle - Math.atan2(rig.head.px - rig.ankle.px, rig.head.py - rig.ankle.py)),
+        Math.cos(rig.bodyAngle - Math.atan2(rig.head.px - rig.ankle.px, rig.head.py - rig.ankle.py))) / STEP,
+    };
+    if (r.releases.length > 0 && (r.catches.length === 0 || !r.catches.at(-1).last)) {
+      r.slowest = Math.min(r.slowest, now.vx * plan.dir);
+    }
+    if (before) {
+      r.jolt = Math.max(r.jolt, Math.hypot(now.vx - before.vx, now.vy - before.vy) / STEP);
+      r.spinJolt = Math.max(r.spinJolt, Math.abs(now.spin - before.spin) / STEP);
+    }
+    r.spin = Math.max(r.spin, Math.abs(now.spin));
+    before = now;
+  }
+  r.endAnchor = left + rig.anchor.x;
+  r.ropeLength = rig.ropeLength;
+  r.motion = rig.motion();
+  r.travelling = rig.travelling;
+  return r;
+}
+
+test('swinging across: web to web to the other side, landing on the spot', () => {
+  const setups = [[1470, 920, 150, 0.27, 0.88], [1920, 1050, 150, 0.27, 0.12], [1470, 920, 110, 0.15, 0.88],
+    [2560, 1400, 200, 0.42, 0.88], [1470, 920, 150, 0.27, 0.88, 1.2], [1470, 920, 150, 0.27, 0.55]];
+  for (const [w, h, body, rope, from, push] of setups) {
+    const r = swingAcross(w, h, body, rope, from, push);
+    const label = `${w}x${h} body ${body} rope ${rope} from ${from}${push ? ' already swinging' : ''}`;
+    assert.ok(r.catches.length >= 1 && r.catches.length <= 6, `${label}: ${r.catches.length} webs`);
+    assert.ok(r.catches.at(-1).last, label);
+    assert.ok(Math.abs(r.endAnchor - r.plan.targetX) < 0.5, `${label}: ended at ${r.endAnchor}, wanted ${r.plan.targetX}`);
+    assert.ok(r.releases[0] < 1.1, `${label}: first let go after ${r.releases[0].toFixed(2)} s`);
+    assert.ok(r.catches.at(-1).t < 4, `${label}: took ${r.catches.at(-1).t.toFixed(1)} s`);
+    // Equal hops, each one on: no short extra hop at the end.
+    const hops = r.catches.map((c, i) => (c.anchorX - (i ? r.catches[i - 1].anchorX : w * from)) * r.plan.dir);
+    assert.ok(Math.min(...hops) > 0.8 * Math.max(...hops), `${label}: hops ${hops.map(Math.round)}`);
+    assert.ok(r.maxStretch < 1.02, `${label}: rope stretched ${r.maxStretch}`);
+    assert.equal(r.touched, false, `${label}: hit the window edge`);
+    assert.ok(r.bentSteps / r.steps < 0.05, `${label}: bent off the rope ${(100 * r.bentSteps / r.steps).toFixed(1)}% of the time`);
+    assert.ok(Math.abs(r.ropeLength - r.rope) < 1, `${label}: rope ${r.ropeLength}`);
+    assert.ok(r.doneAt !== null && r.doneAt < 7, `${label}: still travelling after ${r.doneAt} s`);
+    assert.equal(r.travelling, false);
+    assert.ok(r.motion < 0.5, `${label}: still moving ${r.motion}`);
+  }
+});
+
+test('swinging across is smooth: he never stops between webs, and nothing jerks or whips round', () => {
+  const setups = [[1470, 920, 150, 0.27, 0.88], [1920, 1050, 150, 0.27, 0.12], [1470, 920, 110, 0.15, 0.88],
+    [2560, 1400, 200, 0.42, 0.88], [1470, 920, 150, 0.27, 0.88, 1.2]];
+  for (const [w, h, body, rope, from, push] of setups) {
+    const r = swingAcross(w, h, body, rope, from, push);
+    const label = `${w}x${h} body ${body} rope ${rope} from ${from}${push ? ' already swinging' : ''}`;
+    // Swinging and flying on, never stopping at the top of a swing to grab the next web.
+    assert.ok(r.slowest > 150, `${label}: slowed to ${r.slowest.toFixed(0)} a second`);
+    // A web catching him square to his path pulls no harder than the swing itself (gravity is 1800):
+    // a jerk would show as one step's speed change far above this.
+    assert.ok(r.jolt < 4 * 1800, `${label}: speed changed at ${r.jolt.toFixed(0)} a second per second`);
+    // His body turns at most about a turn a second, and never starts or stops turning all at once.
+    assert.ok(r.spin < 8, `${label}: body turned at ${(r.spin * 180 / Math.PI).toFixed(0)} degrees a second`);
+    assert.ok(r.spinJolt < 150, `${label}: body spin changed at ${(r.spinJolt * 180 / Math.PI).toFixed(0)} degrees a second per second`);
+  }
+});
+
+test('swinging across: a new web keeps his speed, letting go leaves the old web, and he goes the other way from the right half', () => {
+  const { Travel } = require(path.join(D, 'renderer/shared/travel.js'));
+  const rig = mediumRig();
+  rig.kick(1.5, 1);
+  run(rig, 0.3);
+  const speed = rig.ankle.x - rig.ankle.px;
+  const target = rig.anchor.x + 300;
+  rig.reattach(target);
+  assert.equal(rig.anchor.x, target);
+  assert.ok(Math.abs(rig.ropeLength - Math.hypot(rig.ankle.x - target, rig.ankle.y - rig.anchor.y)) < 1e-6);
+  assert.equal(rig.ankle.x - rig.ankle.px, speed);
+  assert.ok(rig.ropeStretch < 1.0001);
+
+  // In the air (his body turned by travel.js) the old web stays where it was and his hand flies
+  // exactly as a thrown ball does, so travel.js can tell where to catch him.
+  const web = rig.particles.slice(0, rig.ropeCount - 1).map((p) => ({ x: p.x, y: p.y }));
+  rig.release();
+  rig.travelling = true;
+  rig.steered = true;
+  const vx = rig.ankle.x - rig.ankle.px;
+  const vy = rig.ankle.y - rig.ankle.py;
+  rig.simulate(0, false, false, null, null);
+  assert.deepEqual(rig.particles.slice(0, rig.ropeCount - 1).map((p) => ({ x: p.x, y: p.y })), web);
+  assert.ok(Math.abs(rig.ankle.x - rig.ankle.px - vx) < 1e-9);
+  assert.ok(Math.abs(rig.ankle.y - rig.ankle.py - (vy + 1800 * STEP * STEP)) < 1e-9);
+  assert.equal(rig.pick({ x: web[3].x, y: web[3].y }), null);
+
+  const work = { x: 0, width: 1000 };
+  assert.deepEqual(Travel.plan(880, work), { dir: -1, targetX: 120 });
+  assert.deepEqual(Travel.plan(300, work), { dir: 1, targetX: 880 });
+});
+
+test('swinging across never stalls: every size and rope, still or already swinging, both ways', () => {
+  // A long rope on a small screen once needed one huge hop: he swung up to the top of the window,
+  // stuck there, and hung about for up to 20 seconds. Already swinging, a steady push held him
+  // tilted, barely moving; and letting go while nearly still once tied a web 3000 points away.
+  const period = (rope) => 2 * Math.PI * Math.sqrt(rope / 1800);
+  for (const [w, h] of [[1280, 720], [1470, 848]]) {
+    for (const body of [110, 150, 200]) {
+      for (const rope of [0.15, 0.27, 0.42]) {
+        for (const from of [0.12, 0.88]) {
+          for (const push of [0, 0.9, -0.9]) {
+            const r = swingAcross(w, h, body, rope, from, push);
+            const label = `${w}x${h} body ${body} rope ${rope} from ${from} push ${push}`;
+            const swing = period(r.rope);
+            assert.ok(r.doneAt !== null && Math.abs(r.endAnchor - r.plan.targetX) < 0.5, `${label}: did not arrive`);
+            assert.ok(r.releases[0] < (push ? 1.25 : 0.8) * swing, `${label}: first let go after ${r.releases[0].toFixed(2)} s`);
+            assert.ok(r.catches.at(-1).t - r.releases[0] < 0.75 * swing * r.catches.length, `${label}: slow hops`);
+            assert.ok(r.highest > 25, `${label}: went up to ${r.highest.toFixed(0)} from the top`);
+            assert.ok(r.longestWeb < 1.25 * r.rope, `${label}: a web ${r.longestWeb.toFixed(0)} long`);
+            assert.ok(r.jolt < 4 * 1800 && r.spin < 8, `${label}: jolt ${r.jolt.toFixed(0)}, spin ${r.spin.toFixed(1)}`);
+          }
+        }
+      }
+    }
+  }
+});

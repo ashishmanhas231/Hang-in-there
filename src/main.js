@@ -573,6 +573,7 @@ function quit() {
  *   remind water|lunch   show that reminder now
  *   remind <text>        show any text in his speech bubble
  *   reminders            open the Reminders window
+ *   travel               swing across to the other side of the screen
  *   exit                 close
  */
 function handleCommand(raw) {
@@ -634,6 +635,9 @@ function handleCommand(raw) {
     }
     case 'reminders':
       openReminders();
+      break;
+    case 'travel':
+      post(hangWin, 'travel');
       break;
     case 'exit':
       quit();
@@ -714,6 +718,7 @@ function buildMenu() {
 
   const template = [
     { label: 'Give him a swing', click: () => swing() },
+    { label: 'Swing across the screen', click: () => post(hangWin, 'travel') },
     { label: 'Reset', click: () => applyLayout() },
     { type: 'separator' },
     {

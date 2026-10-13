@@ -5,7 +5,7 @@
  */
 const { contextBridge, ipcRenderer } = require('electron');
 
-const IN = new Set(['setup', 'look', 'flags', 'push', 'snapshot', 'stats', 'test', 'cursor', 'remind']);
+const IN = new Set(['setup', 'look', 'flags', 'push', 'snapshot', 'stats', 'test', 'cursor', 'remind', 'travel']);
 const OUT = new Set(['ready', 'ignore-mouse', 'menu', 'move-window', 'anchor-dropped', 'problem', 'log', 'snapshot-data', 'test-done']);
 
 const mode = new URLSearchParams(location.search).get('mode') || 'hang';

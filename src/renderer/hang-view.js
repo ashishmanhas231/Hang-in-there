@@ -18,6 +18,7 @@
   const api = window.spidey;
   const { Rig, STEP, REACH_PAST_HEAD } = SH.rig;
   const { Stage, SILK, loadLook } = SH.stage;
+  const { Travel } = SH.travel;
 
   const canvas = document.getElementById('stage');
   const ctx = canvas.getContext('2d');
@@ -54,6 +55,22 @@
   let lastHoverTime = -1;
   let ignoring = true;
 
+  /** The trip across the screen in progress (travel.js), or null. */
+  let travel = null;
+  /**
+   * The window following him across the screen, or null: { x, v } its left edge (screen units, not
+   * rounded) and speed, and with `to` set, a glide there carrying him along (reduced motion). It
+   * moves like a weight on a spring, never in jumps: the screen can show a moved window a frame
+   * before or after the drawing that goes with it, and a window moved in jumps showed him jolting.
+   */
+  let camera = null;
+  /** How tightly the window follows him (per second), and how calmly it glides with reduced motion. */
+  const FOLLOW_SPRING = 8;
+  const GLIDE_SPRING = 4;
+  /** A plain click on him this soon after another (ms) is a double-click: no nudge, he swings across. */
+  const DOUBLE_CLICK_MS = 400;
+  let lastClick = -Infinity;
+
   const log = (message) => api.send('log', message);
   const problem = (message) => api.send('problem', message);
 
@@ -72,6 +89,9 @@
 
   /** Hangs him straight with a small swing, sized and placed as the main process worked out. */
   async function setup(data) {
+    // A new layout (reset, new size, another screen) ends any trip across the screen.
+    endTravel();
+    camera = null;
     layout = data.layout;
     flags = data.flags;
     sizeCanvas();
@@ -102,7 +122,7 @@
   function setFlags(data) {
     const turnedOn = data.autoSwing && !flags.autoSwing;
     flags = { breeze: data.breeze, autoSwing: data.autoSwing };
-    if (turnedOn && layout) {
+    if (turnedOn && layout && !travel) {
       // Slide the web in from a screen edge if he would not have room to swing there.
       const anchorX = layout.left + rig.anchor.x;
       const roomy = Rig.roomToSwing(anchorX, rig.ropeLength, layout.body, layout.work);
@@ -144,9 +164,12 @@
       return;
     }
     const now = nowMs / 1000;
-    const calm = (flags.autoSwing || flags.breeze) && !dragged && !draggingAnchor && !bubble.visible &&
+    const moving = travel !== null || camera !== null;
+    const calm = (flags.autoSwing || flags.breeze) && !dragged && !draggingAnchor && !bubble.visible && !moving &&
       nowMs - lastActive > CALM_AFTER_MS;
-    const interval = calm ? CALM_FRAME : FULL_FRAME;
+    // Swinging across the screen, every frame the screen can show (120 a second on some screens):
+    // it only lasts a few seconds, and it is the fastest he ever moves.
+    const interval = moving ? 0 : calm ? CALM_FRAME : FULL_FRAME;
     // A little slack, so a 60 Hz screen whose frames arrive a hair early never skips one.
     if (lastFrame > 0 && now - lastFrame < interval - 0.004) {
       requestAnimationFrame(frame);
@@ -161,10 +184,16 @@
 
     accumulator += frameDt;
     while (accumulator >= STEP) {
-      rig.simulate(simTime, flags.breeze, flags.autoSwing, dragged, dragTarget);
+      // No breeze or pumping of his own on the way across: travel.js works out each throw exactly.
+      rig.simulate(simTime, flags.breeze && !travel, flags.autoSwing && !travel, dragged, dragTarget);
+      if (travel) {
+        travelStep();
+      }
       accumulator -= STEP;
       simTime += STEP;
     }
+    follow(frameDt);
+    stage.aim = travel ? travel.aim(layout.left) : null;
     stage.blend = accumulator / STEP;
     stage.dragging = dragged !== null;
     stage.advance(frameDt);
@@ -172,7 +201,8 @@
     placeBubble();
 
     // 0.02 units per step is about 5 units a second: too slow to see.
-    const still = !flags.breeze && !flags.autoSwing && !dragged && !draggingAnchor && rig.motion() < 0.02 && stage.settled;
+    const still = !flags.breeze && !flags.autoSwing && !dragged && !draggingAnchor && !moving &&
+      rig.motion() < 0.02 && stage.settled;
     quietTime = still ? quietTime + frameDt : 0;
     if (quietTime > 0.5) {
       rig.freeze();
@@ -182,6 +212,108 @@
       return;
     }
     requestAnimationFrame(frame);
+  }
+
+  // ---- Swinging across the screen ------------------------------------------------------------
+
+  const reducedMotion = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /** Sends him to the other side of the screen: web to web, or a calm glide with reduced motion. */
+  function startTravel() {
+    if (!layout || travel || dragged || draggingAnchor) {
+      return;
+    }
+    const from = layout.left + rig.anchor.x;
+    const plan = Travel.plan(from, layout.work);
+    let targetX = plan.targetX;
+    if (flags.autoSwing) {
+      // Far enough in from the edge to keep swinging on his own when he gets there.
+      targetX = Rig.roomToSwing(targetX, rig.ropeTarget || layout.rope, layout.body, layout.work);
+    }
+    if (reducedMotion()) {
+      log(`Gliding across (reduced motion): web from ${Math.round(from)} to ${Math.round(targetX)}`);
+      camera = { x: layout.left, v: 0, to: Math.round(targetX - rig.anchor.x) };
+      landed(targetX);
+      wake();
+      return;
+    }
+    log(`Swinging across: web from ${Math.round(from)} to ${Math.round(targetX)}`);
+    travel = new Travel(rig, plan.dir, targetX, rig.ropeTarget || layout.rope);
+    travel.begin(layout.left);
+    stage.travelling = true;
+    camera = { x: layout.left, v: camera ? camera.v : 0 };
+    wake();
+  }
+
+  /** After each physics step of a trip. */
+  function travelStep() {
+    const event = travel.step(layout.left);
+    if (event && event.type === 'release') {
+      stage.letGoWeb();
+    } else if (event && event.type === 'catch' && event.last) {
+      landed(event.anchorX);
+    }
+    if (travel.done) {
+      if (travel.phase !== 'land') {
+        landed(layout.left + rig.anchor.x); // gave up on the way: he stays where he is
+      }
+      endTravel();
+    }
+  }
+
+  function endTravel() {
+    if (travel && !travel.done) {
+      travel.stop();
+    }
+    travel = null;
+    stage.travelling = false;
+    stage.aim = null;
+    wake(); // full frame rate a while longer, as after any touch, while he settles
+  }
+
+  /** He has his last web: remember the spot, as dropping the knot there would. */
+  function landed(anchorX) {
+    log(`Swung across: web now at ${Math.round(anchorX)}`);
+    api.send('anchor-dropped', { fraction: (anchorX - layout.work.x) / layout.work.width });
+  }
+
+  /**
+   * Moves the window a frame's worth along. While he swings it keeps his hand in the middle,
+   * matching his speed so it barely lags; on his last web, and after, it settles centred on the web,
+   * as moveAnchorTo leaves it. Everything in the window shifts back by what the window moved, so on
+   * screen he goes on exactly as before. A glide (camera.to) carries him along instead.
+   */
+  function follow(dt) {
+    if (!camera) {
+      return;
+    }
+    const swinging = travel !== null && travel.phase !== 'land';
+    const spring = camera.to !== undefined ? GLIDE_SPRING : FOLLOW_SPRING;
+    const target = camera.to !== undefined ? camera.to
+      : layout.left + (swinging ? rig.ankle.x : rig.anchor.x) - layout.width / 2;
+    const speed = swinging ? (rig.ankle.x - rig.ankle.px) / STEP : 0;
+    camera.v += (spring * spring * (target - camera.x) + 2 * spring * (speed - camera.v)) * dt;
+    camera.x += camera.v * dt;
+    // Never let him get near the window's edge, whatever the spring is doing.
+    const room = layout.width / 2 - rig.bodyLength * 1.4;
+    if (swinging && room > 0) {
+      camera.x = Math.max(target - room, Math.min(target + room, camera.x));
+    }
+    const arrived = !travel && Math.abs(target - camera.x) < 0.5 && Math.abs(camera.v) < 5;
+    const left = arrived ? Math.round(target) : Math.round(camera.x);
+    const step = left - layout.left;
+    if (step !== 0) {
+      if (camera.to === undefined) {
+        rig.shiftEverything(-step);
+        stage.shiftBy(-step);
+      }
+      layout.left = left;
+      api.send('move-window', { left });
+      setVisibleArea();
+    }
+    if (arrived) {
+      camera = null;
+    }
   }
 
   // ---- Reminder bubble --------------------------------------------------------------------
@@ -275,13 +407,23 @@
 
   const local = (e) => ({ x: e.clientX, y: e.clientY });
 
+  // One pixel to draw the scene into for hit testing. Do NOT read pixels back from the canvas on
+  // screen: Chromium then takes that canvas off the GPU for good, and drawing every frame on the CPU
+  // (and copying it to the GPU) cost about a quarter of a CPU core whenever he moved.
+  const probe = new OffscreenCanvas(1, 1).getContext('2d', { willReadFrequently: true });
+
+  /** The drawn alpha (0..255) at a window point: the canvas pixel there, drawn again on its own. */
   function alphaAt(x, y) {
     const px = Math.round(x * dpr);
     const py = Math.round(y * dpr);
     if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) {
       return 0;
     }
-    return ctx.getImageData(px, py, 1, 1).data[3];
+    probe.setTransform(1, 0, 0, 1, 0, 0);
+    probe.clearRect(0, 0, 1, 1);
+    probe.setTransform(dpr, 0, 0, dpr, -px, -py);
+    stage.draw(probe);
+    return probe.getImageData(0, 0, 1, 1).data[3];
   }
 
   /** Lets the mouse through everywhere except over what is drawn (or while dragging). */
@@ -299,8 +441,14 @@
       return;
     }
     const pt = local(e);
+    if (travel) {
+      // Caught mid-swing: he stops travelling and hangs from the web he has.
+      endTravel();
+      landed(layout.left + rig.anchor.x);
+    }
     if (rig.nearAnchor(pt)) {
       draggingAnchor = true;
+      camera = null; // the knot moves the window now
     } else {
       dragged = rig.pick(pt);
       if (!dragged) {
@@ -337,10 +485,17 @@
   });
 
   function release(e) {
-    // A plain click on him (no drag) gives a nudge away from the click.
+    // A plain click on him (no drag) gives a nudge away from the click; a second one straight after
+    // is a double-click, and sends him across the screen without a second nudge first.
+    let double = false;
     if (dragged && !dragMoved) {
       const pt = local(e);
-      rig.kick(0.9, pt.x < (rig.ankle.x + rig.head.x) / 2 ? 1 : -1);
+      const now = performance.now();
+      double = now - lastClick < DOUBLE_CLICK_MS;
+      lastClick = double ? -Infinity : now;
+      if (!double) {
+        rig.kick(0.9, pt.x < (rig.ankle.x + rig.head.x) / 2 ? 1 : -1);
+      }
     }
     try {
       canvas.releasePointerCapture(e.pointerId);
@@ -349,6 +504,9 @@
     }
     endDrag();
     updateHit(local(e));
+    if (double) {
+      startTravel();
+    }
     wake();
   }
 
@@ -368,6 +526,13 @@
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     api.send('menu');
+  });
+  // Anywhere on him or his web, but not the knot, which is for dragging. Usually release() has
+  // already started him off; this catches a double-click slower than DOUBLE_CLICK_MS.
+  canvas.addEventListener('dblclick', (e) => {
+    if (layout && !rig.nearAnchor(local(e))) {
+      startTravel();
+    }
   });
 
   function endDrag() {
@@ -465,6 +630,7 @@
     }
   });
   api.on('remind', (data) => showReminder(data.text));
+  api.on('travel', () => startTravel());
   api.on('snapshot', (data) => snapshot(data.path));
   api.on('stats', () => logStats());
 
@@ -494,6 +660,8 @@
     motion: rig.motion(),
     ignoring,
     flags,
+    travelling: travel !== null,
+    gliding: camera !== null,
     bubble: bubble.visible,
     face: stage.facePoint(),
     bubbleRect: bubble.visible ? bubble.el.getBoundingClientRect().toJSON() : null,
