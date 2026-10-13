@@ -26,6 +26,8 @@
       this.side = 'left';
       /** Its height, measured when the text changes, so placing it each frame never forces a layout. */
       this.height = 0;
+      /** Called once it has faded away. */
+      this.onHidden = null;
     }
 
     measure() {
@@ -81,6 +83,9 @@
       this.later(() => {
         this.visible = false;
         this.el.hidden = true;
+        if (this.onHidden) {
+          this.onHidden();
+        }
       }, FADE_MS);
     }
 

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
+  <link rel="stylesheet" href="reminders.css">
+  <title>Spidey Hang Reminders</title>
+</head>
+<body>
+  <main>
+    <h1>Reminders</h1>
+    <p class="lead">Spidey says these in a speech bubble when they are due.</p>
+
+    <section aria-labelledby="yours">
+      <h2 id="yours">Your reminders</h2>
+      <ul id="list" class="list"></ul>
+      <p id="empty" class="empty" hidden>No reminders of your own yet. Add one below.</p>
+    </section>
+
+    <section aria-labelledby="form-title">
+      <h2 id="form-title">Add a reminder</h2>
+      <form id="form" class="card form" autocomplete="off" novalidate>
+        <label class="field">
+          <span>Message</span>
+          <input id="text" type="text" maxlength="120" placeholder="Stand up and stretch" required>
+        </label>
+
+        <fieldset class="field">
+          <legend>When</legend>
+          <div class="when">
+            <label class="choice"><input type="radio" name="type" value="daily" checked> At</label>
+            <input id="time" type="time" value="09:00" aria-label="Time of day">
+            <span class="hint">each day</span>
+          </div>
+          <div class="when">
+            <label class="choice"><input type="radio" name="type" value="every"> Every</label>
+            <input id="minutes" type="number" min="5" max="1440" step="5" value="60" aria-label="Minutes between reminders">
+            <span class="hint">minutes</span>
+          </div>
+        </fieldset>
+
+        <fieldset class="field">
+          <legend>On</legend>
+          <div id="days" class="days" role="group" aria-label="Days of the week"></div>
+          <div class="presets">
+            <button type="button" class="link" data-days="0,1,2,3,4,5,6">Every day</button>
+            <button type="button" class="link" data-days="1,2,3,4,5">Weekdays</button>
+            <button type="button" class="link" data-days="0,6">Weekends</button>
+          </div>
+        </fieldset>
+
+        <p id="error" class="error" role="alert" hidden></p>
+
+        <div class="actions">
+          <button type="button" id="try" class="secondary">Show it now</button>
+          <span class="spacer"></span>
+          <button type="button" id="cancel" class="secondary" hidden>Cancel</button>
+          <button type="submit" id="submit" class="primary">Add reminder</button>
+        </div>
+      </form>
+    </section>
+
+    <section aria-labelledby="builtin">
+      <h2 id="builtin">Built in</h2>
+      <div class="card">
+        <label class="row toggle-row"><input id="water" type="checkbox"> <span>Drink water every 30 minutes</span></label>
+        <label class="row toggle-row"><input id="lunch" type="checkbox"> <span>Lunch at 3:00 PM</span></label>
+      </div>
+    </section>
+  </main>
+  <script src="reminders-page.js"></script>
+</body>
+</html>

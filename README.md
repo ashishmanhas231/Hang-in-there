@@ -67,6 +67,22 @@ If you drop the web too close to a screen edge, it slides back in just far enoug
 Reminders (**Reminders** in the menu): "Time to drink some water" on every half hour, and "It's your
 lunch time" at 3:00 PM. They appear in a speech bubble just above his face, in every pose.
 
+### Your own reminders
+
+**Reminders > Add or edit reminders…** opens a small window where you write your own:
+
+- **A message**, up to 120 characters: "Stand up and stretch", "Standup in 5 minutes", anything.
+- **When:** at a time each day (10:30 AM), or every so many minutes (5 to 1440). "Every" counts
+  from midnight, so every 30 minutes means on the hour and the half hour, and every 45 minutes means
+  12:00, 12:45, 1:30 and so on.
+- **On which days:** any mix of weekdays, with shortcuts for every day, weekdays and weekends.
+
+Each one can be switched off without deleting it, edited, deleted (with **Undo**), or shown straight
+away with **Show**. They are also listed in the **Reminders** menu, where a click switches one on or
+off. When several reminders are due at once, he says them one after another. A reminder that comes
+due while the computer is asleep is skipped, not shown late. They are kept in `settings.json`
+(`CustomReminders`).
+
 ### Starting automatically
 
 **Start automatically** in his menu is on by default. He then starts when you sign in:
@@ -126,12 +142,12 @@ redirected to a private copy, and so does anything they start. The profile folde
 ## Scripting
 
 A running Spidey takes one-line text commands: `push [strength]`, `reset`, `swing on|off|toggle`,
-`hero <name>|next`, `rotate <minutes>`, `remind water|lunch|<text>`, `snapshot <file.png>`, `stats`
-and `exit`. They travel over the named pipe `\\.\pipe\SpideyHang` on
+`hero <name>|next`, `rotate <minutes>`, `remind water|lunch|<text>`, `reminders` (opens the Reminders
+window), `snapshot <file.png>`, `stats` and `exit`. They travel over the named pipe `\\.\pipe\SpideyHang` on
 Windows and the Unix socket `~/.spidey-hang/spidey.sock` on macOS, which only your own account can open.
 `snapshot` saves only what Spidey himself draws, never the screen behind it.
 
-The app's command line takes `--push [n]`, `--reset` and `--exit` as well.
+The app's command line takes `--push [n]`, `--reset`, `--exit` and `--reminders` as well.
 
 ## How it works
 
@@ -141,6 +157,7 @@ src/
   lib/               plain Node: settings, heroes, reminders, log, command channel, sign-in entries
   heroes/            the iconic heroes' pictures (git-ignored)
   renderer/          the overlay page (no Node access; talks to main.js through preload.js)
+                     and the Reminders window (reminders.html, through reminders-preload.js)
     shared/          physics and drawing, no Electron in it, so the unit tests run it in plain Node
 build/               app icons and the Windows uninstall step
 test/                unit tests (plain Node) and an end-to-end test (real Electron)

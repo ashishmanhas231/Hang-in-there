@@ -207,12 +207,28 @@
     bubble.place(x, y, side);
   }
 
+  /** Reminders that came while the bubble was up wait their turn, a few at most. */
+  const waiting = [];
+  const MAX_WAITING = 5;
+
   function showReminder(text) {
+    if (bubble.visible) {
+      if (waiting.length < MAX_WAITING) {
+        waiting.push(text);
+      }
+      return;
+    }
     bubble.show(text);
     placeBubble();
     rig.kick(0.4); // a little swing to catch the eye
     wake();
   }
+
+  bubble.onHidden = () => {
+    if (waiting.length) {
+      setTimeout(() => showReminder(waiting.shift()), 500);
+    }
+  };
 
   // The bubble takes the mouse while the pointer is over it, so it can be clicked away.
   bubble.el.addEventListener('mousemove', () => {

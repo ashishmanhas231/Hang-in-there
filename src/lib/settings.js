@@ -6,6 +6,7 @@
 const fs = require('fs');
 const paths = require('./paths');
 const log = require('./log');
+const { cleanCustomList } = require('./reminders');
 
 const DRAWN = 'Drawn Spider-Man';
 
@@ -30,6 +31,8 @@ const DEFAULTS = {
   WaterReminder: true,
   /** A "lunch time" bubble every day at 3:00 PM. */
   LunchReminder: true,
+  /** The user's own reminders, made in the Reminders window. See reminders.js for the fields. */
+  CustomReminders: [],
 };
 
 const BODY_LENGTH = { Small: 110, Medium: 150, Large: 200 };
@@ -38,6 +41,8 @@ const ROPE_FRACTION = { Short: 0.15, Medium: 0.27, Long: 0.42 };
 class Settings {
   constructor(values) {
     Object.assign(this, DEFAULTS, values || {});
+    // Never share the defaults' list between copies.
+    this.CustomReminders = cleanCustomList(this.CustomReminders);
   }
 
   get bodyLength() {

@@ -373,7 +373,7 @@ test('reminders: the clock fires when due and skips one missed while asleep', (t
   now += 45 * 60 * 1000;
   t.mock.timers.tick(60 * 1000);
   assert.deepEqual(shown, ['lunch']);
-  assert.equal(clock.next.kind, 'water');
+  assert.equal(clock.next.items[0].kind, 'water');
   assert.equal(new Date(clock.next.at).getMinutes(), 0);
   clock.stop();
 });
@@ -398,4 +398,109 @@ test('after a build, the unpacked app for this system is found to start', () => 
   const arm = touch('mac-arm64', ...macBin);
   assert.equal(findBuiltApp(dist, 'darwin', 'arm64'), arm);
   assert.equal(findBuiltApp(dist, 'darwin', 'x64'), intel);
+});
+
+test('custom reminders: messages, times and days are cleaned, broken ones dropped', () => {
+  const R = require(path.join(D, 'lib/reminders.js'));
+  assert.equal(R.cleanCustom({ text: '   ' }), null);
+  assert.equal(R.cleanCustom('stretch'), null);
+  assert.deepEqual(R.cleanCustom({ id: 'a1', text: '  Stand   up ', type: 'daily', time: '7:05', days: [5, 1, 1, 9], on: false }),
+    { id: 'a1', text: 'Stand up', type: 'daily', time: '07:05', days: [1, 5], on: false });
+  assert.equal(R.cleanCustom({ text: 'x', time: '25:00' }).time, '09:00');
+  assert.deepEqual(R.cleanCustom({ text: 'x', days: [] }).days, [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(R.cleanCustom({ text: 'x', type: 'every', minutes: 1 }).minutes, R.MIN_EVERY);
+  assert.equal(R.cleanCustom({ text: 'x', type: 'every', minutes: 99999 }).minutes, R.MAX_EVERY);
+  assert.equal(R.cleanCustom({ text: 'x'.repeat(500) }).text.length, R.MAX_TEXT);
+  assert.match(R.cleanCustom({ id: 'bad id!', text: 'x' }).id, /^[A-Za-z0-9_-]+$/);
+
+  const list = R.cleanCustomList([{ id: 'same', text: 'a' }, { id: 'same', text: 'b' }, null, { text: '' }]);
+  assert.equal(list.length, 2);
+  assert.notEqual(list[0].id, list[1].id);
+  assert.deepEqual(R.cleanCustomList('nope'), []);
+  assert.equal(R.cleanCustomList(Array.from({ length: 80 }, (_, i) => ({ text: 'r' + i }))).length, R.MAX_CUSTOM);
+});
+
+test('custom reminders: daily at a time, every N minutes from midnight, only on chosen days', () => {
+  const R = require(path.join(D, 'lib/reminders.js'));
+  // 13 October 2026 is a Tuesday.
+  const at = (d, h, m) => new Date(2026, 9, d, h, m);
+  const daily = R.cleanCustom({ text: 'Standup', type: 'daily', time: '10:30' });
+  assert.deepEqual(R.nextCustom(at(13, 9, 0), daily), at(13, 10, 30));
+  assert.deepEqual(R.nextCustom(at(13, 10, 30), daily), at(14, 10, 30));
+
+  // Weekdays only: from Friday afternoon the next one is Monday.
+  const weekdays = { ...daily, days: [1, 2, 3, 4, 5] };
+  assert.deepEqual(R.nextCustom(at(16, 12, 0), weekdays), at(19, 10, 30));
+
+  const every = R.cleanCustom({ text: 'Stretch', type: 'every', minutes: 45 });
+  assert.deepEqual(R.nextCustom(at(13, 10, 0), every), at(13, 10, 30));
+  assert.deepEqual(R.nextCustom(at(13, 10, 30), every), at(13, 11, 15));
+  // The last one of the day, then it starts again at midnight.
+  assert.deepEqual(R.nextCustom(at(13, 23, 10), every), at(13, 23, 15));
+  assert.deepEqual(R.nextCustom(at(13, 23, 20), every), at(14, 0, 0));
+  // Only on Sundays: from Tuesday, the first is Sunday at midnight.
+  assert.deepEqual(R.nextCustom(at(13, 9, 0), { ...every, days: [0] }), at(18, 0, 0));
+});
+
+test('custom reminders: due together with water or lunch, all are shown; switched off ones never', () => {
+  const R = require(path.join(D, 'lib/reminders.js'));
+  const at = (h, m) => new Date(2026, 9, 13, h, m);
+  const stretch = R.cleanCustom({ id: 's', text: 'Stretch', type: 'every', minutes: 60 });
+  const standup = R.cleanCustom({ id: 'u', text: 'Standup', type: 'daily', time: '10:15' });
+
+  let next = R.nextReminders(at(10, 5), { water: true, lunch: true, custom: [stretch, standup] });
+  assert.deepEqual(next, { at: at(10, 15), items: [{ kind: 'custom', text: 'Standup', id: 'u' }] });
+
+  next = R.nextReminders(at(10, 40), { water: true, lunch: true, custom: [stretch, standup] });
+  assert.deepEqual(next.at, at(11, 0));
+  assert.deepEqual(next.items.map((i) => i.text), [R.TEXT.water, 'Stretch']);
+
+  // At 3 PM lunch still replaces water, and the custom one comes too.
+  next = R.nextReminders(at(14, 40), { water: true, lunch: true, custom: [stretch] });
+  assert.deepEqual(next.items.map((i) => i.kind), ['lunch', 'custom']);
+
+  next = R.nextReminders(at(10, 5), { water: false, lunch: false, custom: [{ ...standup, on: false }] });
+  assert.equal(next, null);
+  assert.deepEqual(R.nextReminder(at(10, 5), { water: false, lunch: false, custom: [standup] }), { kind: 'custom', at: at(10, 15) });
+});
+
+test('custom reminders: described in words, and the clock shows every one that is due', (t) => {
+  const R = require(path.join(D, 'lib/reminders.js'));
+  assert.equal(R.describeCustom({ type: 'every', minutes: 45, days: [0, 1, 2, 3, 4, 5, 6] }), 'Every 45 minutes');
+  assert.equal(R.describeCustom({ type: 'every', minutes: 60, days: [1, 2, 3, 4, 5] }), 'Every hour on weekdays');
+  assert.equal(R.describeCustom({ type: 'every', minutes: 120, days: [0, 6] }), 'Every 2 hours on weekends');
+  assert.match(R.describeCustom({ type: 'daily', time: '10:30', days: [0, 1, 2, 3, 4, 5, 6] }), /^Every day at .*10.30/);
+  assert.match(R.describeCustom({ type: 'daily', time: '08:00', days: [1, 3] }), /^On Mon, Wed at /);
+
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = new Date(2026, 9, 13, 10, 59, 30).getTime();
+  const shown = [];
+  const custom = [R.cleanCustom({ text: 'Stretch', type: 'every', minutes: 30 })];
+  const clock = new R.ReminderClock(() => ({ water: true, lunch: false, custom }), (r) => shown.push(r.text), () => new Date(now));
+  clock.start();
+  now += 30 * 1000;
+  t.mock.timers.tick(30 * 1000);
+  assert.deepEqual(shown, [R.TEXT.water, 'Stretch']);
+  clock.stop();
+});
+
+test('settings: custom reminders are saved, and broken ones in the file are dropped', () => {
+  tempHome();
+  const { Settings, DEFAULTS } = require(path.join(D, 'lib/settings.js'));
+  const s = new Settings();
+  assert.deepEqual(s.CustomReminders, []);
+  s.CustomReminders = [{ id: 'w', text: 'Water the plants', type: 'daily', time: '18:00', days: [6], on: true }];
+  s.save();
+  assert.deepEqual(Settings.load().CustomReminders, s.CustomReminders);
+  assert.deepEqual(DEFAULTS.CustomReminders, []);
+
+  const raw = JSON.parse(fs.readFileSync(path.join(process.env.SPIDEY_HANG_HOME, 'settings.json'), 'utf8'));
+  raw.CustomReminders = [{ text: '' }, { text: 'Ok', type: 'every', minutes: '30' }, 42];
+  fs.writeFileSync(path.join(process.env.SPIDEY_HANG_HOME, 'settings.json'), JSON.stringify(raw));
+  const loaded = Settings.load().CustomReminders;
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].minutes, 30);
+  raw.CustomReminders = 'not a list';
+  fs.writeFileSync(path.join(process.env.SPIDEY_HANG_HOME, 'settings.json'), JSON.stringify(raw));
+  assert.deepEqual(Settings.load().CustomReminders, []);
 });

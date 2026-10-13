@@ -120,6 +120,14 @@ async function main() {
       await logHas(/Reminder \(water\): Time to drink some water/);
     });
 
+    await check('the Reminders window opens from a command, and only once', async () => {
+      await ipc.send('reminders');
+      await logHas(/Reminders window opened/);
+      await ipc.send('reminders');
+      await sleep(500);
+      assert.equal(logText().match(/Reminders window opened/g).length, 1);
+    });
+
     await check('the drawing, hero rotation on and off, next hero, stats, reset', async () => {
       await ipc.send('hero Drawn Spider-Man');
       await logHas(/Look: drawn Spider-Man/);

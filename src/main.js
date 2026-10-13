@@ -5,13 +5,14 @@
  *   npm start  /  the installed app       start the overlay; if it is already running, give him a swing
  *   ... --push [n] | --reset | --exit      send that to the running overlay
  *   ... --at-login                         what sign-in runs: waits a few seconds for the taskbar or Dock
+ *   ... --reminders                        open the Reminders window (starting the overlay if needed)
  * Development only (not in the installed app), nothing appears on screen:
  *   ... --snapshot f.png [seconds] [kick] [hero folder|-] [-] [swing|-] [edge]
  *   ... --export-figure f.png
  */
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, nativeTheme, Notification } = require('electron');
 
 const paths = require('./lib/paths');
 const log = require('./lib/log');
@@ -61,7 +62,7 @@ if (!app.isPackaged && (has('--snapshot') || has('--export-figure'))) {
     app.exit(0);
   } else {
     app.on('second-instance', (_event, argv) => {
-      handleCommand(commandFromArgs(argv) || 'push 1');
+      handleCommand(commandFromArgs(argv) || (argv.includes('--reminders') ? 'reminders' : 'push 1'));
     });
     app.whenReady().then(async () => {
       if (has('--at-login')) {
@@ -69,6 +70,9 @@ if (!app.isPackaged && (has('--snapshot') || has('--export-figure'))) {
         await new Promise((r) => setTimeout(r, 4000));
       }
       start();
+      if (has('--reminders')) {
+        openReminders();
+      }
     });
   }
 }
@@ -81,6 +85,7 @@ app.on('window-all-closed', () => {});
 let settings = null;
 let tray = null;
 let hangWin = null;
+let remindersWin = null;
 let server = null;
 const ready = new WeakMap(); // window -> true once its page listens
 const queued = new WeakMap(); // window -> messages sent before that
@@ -98,7 +103,8 @@ function signInCommand() {
 function start() {
   settings = Settings.load();
   log.write(`Start ${app.getVersion()} (Electron ${process.versions.electron}, ${process.platform} ${process.arch}) from ${app.getAppPath()}${has('--at-login') ? ' at sign-in' : ''}. ` +
-    `Settings: size ${settings.Size}, rope ${settings.Rope}, hero ${settings.Hero}, change hero every ${settings.RotateMinutes} min, start automatically ${settings.StartAutomatically}`);
+    `Settings: size ${settings.Size}, rope ${settings.Rope}, hero ${settings.Hero}, change hero every ${settings.RotateMinutes} min, start automatically ${settings.StartAutomatically}, ` +
+    `custom reminders ${settings.CustomReminders.length}`);
   if (isMac && app.dock) {
     app.dock.hide();
   }
@@ -118,7 +124,7 @@ function start() {
   hangWin = createOverlay('hang');
   applyLayout();
   startRotateTimer();
-  reminderClock = new reminders.ReminderClock(() => ({ water: settings.WaterReminder, lunch: settings.LunchReminder }), remind);
+  reminderClock = new reminders.ReminderClock(() => ({ water: settings.WaterReminder, lunch: settings.LunchReminder, custom: settings.CustomReminders }), remind);
   reminderClock.start();
 
   if (process.platform === 'linux') {
@@ -412,10 +418,116 @@ function remind({ kind, text }) {
 
 function toggleReminder(key) {
   settings[key] = !settings[key];
-  settings.save();
-  log.write(`Reminders: water ${settings.WaterReminder}, lunch ${settings.LunchReminder}`);
-  reminderClock.start();
+  remindersChanged();
 }
+
+function toggleCustomReminder(id) {
+  settings.CustomReminders = settings.CustomReminders.map((r) => (r.id === id ? { ...r, on: !r.on } : r));
+  remindersChanged();
+}
+
+/** Saves the reminder settings, restarts the reminder clock, and updates the Reminders window. */
+function remindersChanged() {
+  settings.save();
+  const on = settings.CustomReminders.filter((r) => r.on).length;
+  log.write(`Reminders: water ${settings.WaterReminder}, lunch ${settings.LunchReminder}, ` +
+    `custom ${settings.CustomReminders.length} (${on} on)`);
+  reminderClock.start();
+  if (remindersWin && !remindersWin.isDestroyed()) {
+    remindersWin.webContents.send('reminders:changed', reminderState());
+  }
+}
+
+/** What the Reminders window shows. */
+function reminderState() {
+  return {
+    water: settings.WaterReminder,
+    lunch: settings.LunchReminder,
+    custom: settings.CustomReminders.map((r) => ({ ...r, summary: reminders.describeCustom(r) })),
+  };
+}
+
+// ---- Reminders window ------------------------------------------------------------------------
+
+/** Opens the Reminders window, or brings it to the front if it is already open. */
+function openReminders() {
+  if (remindersWin && !remindersWin.isDestroyed()) {
+    if (remindersWin.isMinimized()) {
+      remindersWin.restore();
+    }
+    remindersWin.show();
+    remindersWin.focus();
+    return;
+  }
+  remindersWin = new BrowserWindow({
+    width: 560,
+    height: 720,
+    minWidth: 400,
+    minHeight: 460,
+    show: false,
+    title: 'Spidey Hang Reminders',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#f5f5f7',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'renderer', 'reminders-preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  });
+  if (!isMac) {
+    remindersWin.removeMenu();
+  }
+  const win = remindersWin;
+  // Links or new windows have no place here.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.once('ready-to-show', () => {
+    if (isMac) {
+      // The app has no Dock icon, so it has to be brought to the front for the window to show there.
+      app.focus({ steal: true });
+    }
+    win.show();
+    win.focus();
+  });
+  win.on('closed', () => {
+    if (remindersWin === win) {
+      remindersWin = null;
+    }
+  });
+  win.loadFile(path.join(__dirname, 'renderer', 'reminders.html'));
+  log.write('Reminders window opened');
+}
+
+/** Only the Reminders window may read or change the reminders. */
+const fromRemindersWindow = (event) => remindersWin && !remindersWin.isDestroyed() && event.sender === remindersWin.webContents;
+
+ipcMain.handle('reminders:get', (event) => (fromRemindersWindow(event) ? reminderState() : null));
+
+ipcMain.handle('reminders:save', (event, data) => {
+  if (!fromRemindersWindow(event) || !data || typeof data !== 'object') {
+    return null;
+  }
+  if (typeof data.water === 'boolean') {
+    settings.WaterReminder = data.water;
+  }
+  if (typeof data.lunch === 'boolean') {
+    settings.LunchReminder = data.lunch;
+  }
+  if (Array.isArray(data.custom)) {
+    // Cleaned like settings.json, which also drops the "summary" the window was given.
+    settings.CustomReminders = reminders.cleanCustomList(data.custom);
+  }
+  remindersChanged();
+  return reminderState();
+});
+
+ipcMain.handle('reminders:test', (event, text) => {
+  const clean = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim().slice(0, reminders.MAX_TEXT) : '';
+  if (fromRemindersWindow(event) && clean) {
+    remind({ kind: 'test', text: clean });
+  }
+});
 
 function setAutoSwing(on) {
   settings.AutoSwing = on;
@@ -460,6 +572,7 @@ function quit() {
  *   stats                write frame timing to the log
  *   remind water|lunch   show that reminder now
  *   remind <text>        show any text in his speech bubble
+ *   reminders            open the Reminders window
  *   exit                 close
  */
 function handleCommand(raw) {
@@ -519,6 +632,9 @@ function handleCommand(raw) {
       }
       break;
     }
+    case 'reminders':
+      openReminders();
+      break;
     case 'exit':
       quit();
       break;
@@ -575,6 +691,12 @@ function showMenuAtCursor(win) {
   }
 }
 
+/** A reminder's text, short enough for a menu, with & shown as itself (Windows menus treat it as a shortcut key). */
+function menuText(text) {
+  const short = text.length > 40 ? text.slice(0, 39).trimEnd() + '…' : text;
+  return isWindows ? short.replace(/&/g, '&&') : short;
+}
+
 function radio(label, checked, click) {
   return { label, type: 'radio', checked, click };
 }
@@ -619,7 +741,15 @@ function buildMenu() {
       submenu: [
         { label: 'Drink water every 30 minutes', type: 'checkbox', checked: settings.WaterReminder, click: () => toggleReminder('WaterReminder') },
         { label: 'Lunch at 3:00 PM', type: 'checkbox', checked: settings.LunchReminder, click: () => toggleReminder('LunchReminder') },
+        ...(settings.CustomReminders.length ? [{ type: 'separator' }] : []),
+        ...settings.CustomReminders.map((r) => ({
+          label: `${menuText(r.text)}  (${reminders.describeCustom(r)})`,
+          type: 'checkbox',
+          checked: r.on,
+          click: () => toggleCustomReminder(r.id),
+        })),
         { type: 'separator' },
+        { label: 'Add or edit reminders…', click: openReminders },
         { label: 'Show a test reminder', click: () => remind({ kind: 'water', text: reminders.TEXT.water }) },
       ],
     },
