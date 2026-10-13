@@ -26,6 +26,11 @@ npm run dist:mac    # on a Mac:   dist/Spidey Hang-<version>-arm64.dmg (Apple si
 
 Each system's installer has to be built on that system (the GitHub workflow does both).
 
+When the build finishes, Spidey appears straight away: the command closes any Spidey that is
+already running and starts the copy it just built (`dist/win-unpacked`, or `dist/mac-arm64` /
+`dist/mac` on a Mac). Set `SPIDEY_NO_LAUNCH=1` to only build. It never starts on CI.
+The Windows installer also starts him as soon as it finishes installing.
+
 The Windows installer is a one-click, per-user install (no admin rights). The macOS build is not
 notarized, so the first time you open it, right-click the app and choose **Open**
 (or allow it under System Settings > Privacy & Security).

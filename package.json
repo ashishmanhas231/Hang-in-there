@@ -16,9 +16,9 @@
     "start": "electron .",
     "test": "node --test test/unit.test.js",
     "test:e2e": "node test/e2e.js",
-    "dist": "electron-builder",
-    "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac"
+    "dist": "node scripts/dist.js",
+    "dist:win": "node scripts/dist.js --win",
+    "dist:mac": "node scripts/dist.js --mac"
   },
   "devDependencies": {
     "electron": "44.4.5",
@@ -58,7 +58,8 @@
       "oneClick": true,
       "perMachine": false,
       "deleteAppDataOnUninstall": true,
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "runAfterFinish": true
     },
     "mac": {
       "category": "public.app-category.entertainment",

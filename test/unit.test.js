@@ -377,3 +377,25 @@ test('reminders: the clock fires when due and skips one missed while asleep', (t
   assert.equal(new Date(clock.next.at).getMinutes(), 0);
   clock.stop();
 });
+
+test('after a build, the unpacked app for this system is found to start', () => {
+  const { findBuiltApp } = require(path.join(__dirname, '..', 'scripts', 'dist.js'));
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'spidey-dist-'));
+  const touch = (...parts) => {
+    const file = path.join(dist, ...parts);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '');
+    return file;
+  };
+  assert.equal(findBuiltApp(dist, 'win32', 'x64'), null);
+  const exe = touch('win-unpacked', 'Spidey Hang.exe');
+  assert.equal(findBuiltApp(dist, 'win32', 'x64'), exe);
+
+  const macBin = ['Spidey Hang.app', 'Contents', 'MacOS', 'Spidey Hang'];
+  const intel = touch('mac', ...macBin);
+  assert.equal(findBuiltApp(dist, 'darwin', 'arm64'), null);
+  assert.equal(findBuiltApp(dist, 'darwin', 'x64'), intel);
+  const arm = touch('mac-arm64', ...macBin);
+  assert.equal(findBuiltApp(dist, 'darwin', 'arm64'), arm);
+  assert.equal(findBuiltApp(dist, 'darwin', 'x64'), intel);
+});
