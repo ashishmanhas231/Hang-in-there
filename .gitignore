@@ -1,25 +1,27 @@
-# Build output. scripts/build-vsix.py makes all of these again.
-bin/
-obj/
+# Build output (npm run dist)
 dist/
-*.vsix
+
+# Dependencies (npm install)
+node_modules/
 
 # Personal hero pictures and settings, in case a copy lands in here by mistake.
-# They belong in %USERPROFILE%\.spidey-hang and must never be published.
-heroes/
+# They belong in ~/.spidey-hang and must never be published.
+/heroes/
 spidey-hang-personal/
 .spidey-hang/
 
+# Backup made before the standalone-app cleanup
+.backup-before-cleanup.tar.gz
+
 # Editor and OS clutter
 .vs/
+.vscode/
 *.user
 Thumbs.db
 .DS_Store
 
-# Output of the test helpers in the README (frame.png, frame.png.log, strip.png, figure.png).
+# Output of the test helpers in the README
 frame.png
 frame.png.log
 strip.png
 figure.png
-
-node_modules/

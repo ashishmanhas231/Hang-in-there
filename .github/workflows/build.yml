@@ -7,38 +7,81 @@ on:
   pull_request:
 
 jobs:
-  vsix:
-    runs-on: windows-latest
-    permissions:
-      contents: write # only used to attach the .vsix to a release on a v* tag
+  test:
+    name: Test on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-node@v4
         with:
-          dotnet-version: 10.0.x
+          node-version: 22
+          cache: npm
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
+      - run: npm ci
 
-      - name: Check the extension scripts parse
+      - name: Check every script parses
         shell: bash
-        run: |
-          node --check extension.js
-          node --check media/hang.js
+        run: for f in $(find src test -name '*.js'); do node --check "$f"; done
 
-      - name: Build the desktop app and pack the .vsix
-        run: python scripts/build-vsix.py
+      - name: Unit tests
+        run: npm test
+
+      # Starts the real overlay, drives it over its command channel and renders every hero move set.
+      # Windows and macOS runners have a desktop; Linux needs a virtual one.
+      - name: End-to-end test (Windows, macOS)
+        if: runner.os != 'Linux'
+        run: npm run test:e2e
+
+      - name: End-to-end test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:e2e
+
+  package:
+    name: Package for ${{ matrix.name }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            script: dist:win
+            files: dist/*.exe
+          - name: macOS
+            os: macos-latest
+            script: dist:mac
+            files: dist/*.dmg
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write # only used to attach the installers to a release on a v* tag
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build the installer
+        run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - uses: actions/upload-artifact@v4
         with:
-          name: spidey-hang-vsix
-          path: dist/*.vsix
+          name: spidey-hang-${{ matrix.name }}
+          path: ${{ matrix.files }}
 
-      - name: Attach the .vsix to a release
+      - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
-        run: gh release create "$GITHUB_REF_NAME" dist/*.vsix --generate-notes
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.files }} --clobber || gh release create "$GITHUB_REF_NAME" ${{ matrix.files }} --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

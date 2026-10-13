@@ -1,0 +1,9 @@
+{
+  // Upside down at rest, swing pose (held by his web fist) while he moves.
+  // "face" is where reminder bubbles point.
+  "line": "web",
+  "poses": {
+    "hang": { "faceSize": 62, "points": { "face": [255, 662] } },
+    "swing": { "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185] } }
+  }
+}

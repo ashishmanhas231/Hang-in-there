@@ -1,0 +1,5 @@
+{
+  // Classic upside-down hang, always. "face" is where reminder bubbles point.
+  "line": "web",
+  "poses": { "hang": { "faceSize": 62, "points": { "face": [255, 662] } } }
+}

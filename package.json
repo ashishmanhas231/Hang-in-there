@@ -1,129 +1,87 @@
 {
   "name": "spidey-hang",
-  "displayName": "Spidey Hang",
-  "description": "Spider-Man hangs upside down from a web, on your desktop or in your sidebar. Drag him and he swings.",
-  "version": "0.9.0",
-  "publisher": "local",
+  "productName": "Spidey Hang",
+  "version": "1.0.0",
+  "description": "Spider-Man hangs upside down from a web on your desktop (Windows and macOS). Drag him and he swings.",
+  "main": "src/main.js",
+  "private": true,
   "license": "MIT",
   "author": "Ashish Manhas",
+  "homepage": "https://github.com/ashishmanhas231/Hang-in-there#readme",
   "repository": {
     "type": "git",
     "url": "https://github.com/ashishmanhas231/Hang-in-there.git"
   },
-  "bugs": {
-    "url": "https://github.com/ashishmanhas231/Hang-in-there/issues"
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/unit.test.js",
+    "test:e2e": "node test/e2e.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
   },
-  "homepage": "https://github.com/ashishmanhas231/Hang-in-there#readme",
-  "engines": {
-    "vscode": "^1.80.0"
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
   },
-  "categories": [
-    "Other"
-  ],
-  "keywords": [
-    "spider-man",
-    "spiderman",
-    "pet",
-    "toy",
-    "physics"
-  ],
-  "main": "./extension.js",
-  "activationEvents": [
-    "onStartupFinished"
-  ],
-  "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "spideyHang",
-          "title": "Spidey",
-          "icon": "media/icon.svg"
-        }
-      ]
+  "build": {
+    "appId": "com.spideyhang.app",
+    "productName": "Spidey Hang",
+    "copyright": "Copyright (c) Ashish Manhas",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
     },
-    "views": {
-      "spideyHang": [
-        {
-          "type": "webview",
-          "id": "spideyHang.view",
-          "name": "Hanging Around"
-        }
-      ]
-    },
-    "commands": [
-      {
-        "command": "spideyHang.desktop.start",
-        "title": "Spidey: Hang on Desktop"
-      },
-      {
-        "command": "spideyHang.desktop.stop",
-        "title": "Spidey: Take Down from Desktop"
-      },
-      {
-        "command": "spideyHang.desktop.toggle",
-        "title": "Spidey: Toggle Desktop Spidey"
-      },
-      {
-        "command": "spideyHang.desktop.choosePicture",
-        "title": "Spidey: Use My Own Picture on Desktop..."
-      },
-      {
-        "command": "spideyHang.desktop.useDrawing",
-        "title": "Spidey: Use Drawn Spider-Man on Desktop"
-      },
-      {
-        "command": "spideyHang.desktop.toggleSwing",
-        "title": "Spidey: Swing on His Own (on/off)"
-      },
-      {
-        "command": "spideyHang.desktop.chooseHero",
-        "title": "Spidey: Choose Hero..."
-      },
-      {
-        "command": "spideyHang.desktop.nextHero",
-        "title": "Spidey: Next Hero"
-      },
-      {
-        "command": "spideyHang.desktop.openHeroesFolder",
-        "title": "Spidey: Open Heroes Folder"
-      },
-      {
-        "command": "spideyHang.openInEditor",
-        "title": "Spidey: Open in Editor Tab"
-      },
-      {
-        "command": "spideyHang.push",
-        "title": "Spidey: Give Him a Swing"
-      },
-      {
-        "command": "spideyHang.reset",
-        "title": "Spidey: Reset"
-      }
+    "files": [
+      "src/**/*",
+      "!src/renderer/test-view.js"
     ],
-    "configuration": {
-      "title": "Spidey Hang",
-      "properties": {
-        "spideyHang.desktop.startWithVSCode": {
-          "type": "boolean",
-          "default": false,
-          "description": "Also start desktop Spidey whenever VS Code starts, even if \"Start automatically\" is switched off in his own menu. With that switch on (the default) he already starts with Windows and with VS Code. Windows only."
-        },
-        "spideyHang.desktop.statusBarButton": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show the Spidey button in the status bar. Click it to hang him on the desktop or take him down."
-        },
-        "spideyHang.idleBreeze": {
-          "type": "boolean",
-          "default": true,
-          "description": "Sidebar view only: a light breeze so he sways a little even when nobody touches him. The desktop version has its own Breeze switch in the tray menu."
-        },
-        "spideyHang.swingOnSave": {
-          "type": "boolean",
-          "default": false,
-          "description": "Give him a small swing every time a file is saved. Works for both the sidebar and the desktop."
+    "asar": true,
+    "compression": "maximum",
+    "electronLanguages": [
+      "en",
+      "en-US",
+      "en_US"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
         }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": true,
+      "include": "build/installer.nsh"
+    },
+    "mac": {
+      "category": "public.app-category.entertainment",
+      "icon": "build/icon.icns",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "LSUIElement": true
       }
-    }
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "writeUpdateInfo": false
+    },
+    "publish": null
   }
 }

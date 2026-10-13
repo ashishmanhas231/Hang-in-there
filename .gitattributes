@@ -2,6 +2,5 @@
 * text=auto
 
 *.png binary
-*.exe binary
-*.dll binary
-*.vsix binary
+*.ico binary
+*.icns binary

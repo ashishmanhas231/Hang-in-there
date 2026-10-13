@@ -1,0 +1,6 @@
+{
+  // Mid-swing pose, held by the fist that grips the web, as in the reference picture.
+  // "face" is where reminder bubbles point.
+  "line": "web",
+  "poses": { "hang": { "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185] } } }
+}

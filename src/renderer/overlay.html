@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:">
+  <link rel="stylesheet" href="overlay.css">
+  <title>Spidey Hang</title>
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <div id="bubble" class="bubble" hidden>
+    <div class="bubble-pop">
+      <div class="bubble-body">
+        <span class="bubble-dots"><i></i><i></i><i></i></span><span class="bubble-text"></span><span class="bubble-caret"></span>
+        <svg class="bubble-tail" width="16" height="20" viewBox="0 0 16 20"><path d="M0 0 C1 9 5 15 16 20 C8 20 3 18 0 15 Z"/></svg>
+      </div>
+    </div>
+  </div>
+  <script src="bubble.js"></script>
+  <script src="shared/vec.js"></script>
+  <script src="shared/rig.js"></script>
+  <script src="shared/images.js"></script>
+  <script src="shared/stage.js"></script>
+  <script src="shared/figure.js"></script>
+  <script src="boot.js"></script>
+</body>
+</html>
