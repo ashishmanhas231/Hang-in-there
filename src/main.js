@@ -1,6 +1,6 @@
 'use strict';
 /*
- * Spidey Hang: Electron main process. Runs on Windows and macOS (Linux works too, for development).
+ * Spidey Hang: Electron main process. Runs on Windows, macOS and Linux (built and tested for Ubuntu).
  *
  *   npm start  /  the installed app       start the overlay; if it is already running, give him a swing
  *   ... --push [n] | --reset | --exit      send that to the running overlay
@@ -20,17 +20,19 @@ const ipc = require('./lib/ipc');
 const heroes = require('./lib/heroes');
 const startup = require('./lib/startup');
 const reminders = require('./lib/reminders');
+const linux = require('./lib/linux');
 const { Settings, DRAWN } = require('./lib/settings');
 const { Rig, REACH_PAST_HEAD } = require('./renderer/shared/rig.js');
 
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
 
 /** The default hero (settings.js), shipped in src/heroes. Keep the two names the same. */
 const DEFAULT_BUNDLED_HERO = 'Iconic Spidey - Upside Down';
 
 // Arguments after the app folder (electron <folder> ...), or after the executable when packaged.
-const args = process.argv.slice(process.defaultApp ? 2 : 1).filter((a) => !a.startsWith('--no-sandbox') && !a.startsWith('--enable-') && !a.startsWith('--disable-'));
+const args = process.argv.slice(process.defaultApp ? 2 : 1).filter((a) => !a.startsWith('--no-sandbox') && !a.startsWith('--enable-') && !a.startsWith('--disable-') && !a.startsWith('--ozone-'));
 const has = (flag) => args.includes(flag);
 
 app.setName('Spidey Hang');
@@ -48,9 +50,14 @@ function commandFromArgs(list) {
   return list[i].slice(2);
 }
 
-// ---- Test modes (development only): no single-instance lock, no tray -------------------------
+// ---- Start-up. Test modes (development only) get no single-instance lock and no tray ----------
 
-if (!app.isPackaged && (has('--snapshot') || has('--export-figure'))) {
+if (!commandFromArgs(args) && linux.needsX11Restart()) {
+  // On a Wayland desktop: start again under X11 (see lib/linux.js), with the same arguments.
+  // Not for --push, --reset or --exit: those only pass the command on and never show a window.
+  app.relaunch({ args: [...process.argv.slice(1), linux.X11_SWITCH] });
+  app.exit(0);
+} else if (!app.isPackaged && (has('--snapshot') || has('--export-figure'))) {
   app.whenReady().then(runTest);
 } else if (!app.requestSingleInstanceLock()) {
   // Another overlay is running. It receives our arguments through 'second-instance'.
@@ -176,6 +183,10 @@ function createOverlay(mode, show = true) {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   } else {
     win.setAlwaysOnTop(true, 'screen-saver');
+  }
+  if (isLinux) {
+    // Stays put when you switch workspaces, as on a Mac.
+    win.setVisibleOnAllWorkspaces(true);
   }
   // Clicks fall through until the page says the pointer is over him. Moves are still forwarded.
   win.setIgnoreMouseEvents(true, { forward: true });
@@ -675,12 +686,29 @@ function createTray() {
     tray.on('click', () => tray.popUpContextMenu(buildMenu()));
     tray.on('right-click', () => tray.popUpContextMenu(buildMenu()));
   } else {
+    // Linux (Ubuntu's AppIndicator): the desktop shows the menu itself and never asks for a fresh
+    // one, so it is handed over again after every change (refreshTrayMenu). Clicks on the icon only
+    // open the menu there; "Give him a swing" is its first item.
     tray.setContextMenu(buildMenu());
     tray.on('click', () => swing());
+    const save = settings.save.bind(settings);
+    settings.save = () => {
+      save();
+      refreshTrayMenu();
+    };
   }
   for (const message of unseenProblems.splice(0)) {
     showProblem(message);
   }
+}
+
+/** Linux: a new menu for the tray, after the old one has finished handling its click. */
+function refreshTrayMenu() {
+  setImmediate(() => {
+    if (tray && !tray.isDestroyed()) {
+      tray.setContextMenu(buildMenu());
+    }
+  });
 }
 
 /** Right-clicking him opens the same menu as the tray, at the pointer. */

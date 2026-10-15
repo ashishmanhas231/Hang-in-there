@@ -398,6 +398,26 @@ test('after a build, the unpacked app for this system is found to start', () => 
   const arm = touch('mac-arm64', ...macBin);
   assert.equal(findBuiltApp(dist, 'darwin', 'arm64'), arm);
   assert.equal(findBuiltApp(dist, 'darwin', 'x64'), intel);
+
+  assert.equal(findBuiltApp(dist, 'linux', 'x64'), null);
+  const linuxExe = touch('linux-unpacked', 'spidey-hang');
+  assert.equal(findBuiltApp(dist, 'linux', 'x64'), linuxExe);
+});
+
+test('Linux: a Wayland desktop starts again under X11, once; X11 desktops and other systems never do', () => {
+  const { needsX11Restart, X11_SWITCH } = require(path.join(D, 'lib/linux.js'));
+  const argv = ['/opt/Spidey Hang/spidey-hang', '--at-login'];
+  const wayland = { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' };
+  assert.equal(needsX11Restart('linux', wayland, argv), true);
+  assert.equal(needsX11Restart('linux', { DISPLAY: ':0', XDG_SESSION_TYPE: 'wayland' }, argv), true);
+  assert.equal(needsX11Restart('linux', { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0' }, argv), true);
+  // Already restarted (or started from the app menu, which passes the switch).
+  assert.equal(needsX11Restart('linux', wayland, [...argv, X11_SWITCH]), false);
+  // An X11 desktop, or Wayland with no XWayland to fall back on.
+  assert.equal(needsX11Restart('linux', { DISPLAY: ':0', XDG_SESSION_TYPE: 'x11' }, argv), false);
+  assert.equal(needsX11Restart('linux', { WAYLAND_DISPLAY: 'wayland-0', XDG_SESSION_TYPE: 'wayland' }, argv), false);
+  assert.equal(needsX11Restart('win32', wayland, argv), false);
+  assert.equal(needsX11Restart('darwin', wayland, argv), false);
 });
 
 test('custom reminders: messages, times and days are cleaned, broken ones dropped', () => {

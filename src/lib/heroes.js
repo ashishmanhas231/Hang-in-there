@@ -1,7 +1,7 @@
 'use strict';
 /*
  * The heroes that ship inside the app: one folder each under src/heroes (inside app.asar when
- * packaged, which Electron's fs reads like any other folder). The same on Windows and macOS.
+ * packaged, which Electron's fs reads like any other folder). The same on every system.
  *
  * Pictures are found by file name (any case, .png .webp .gif .bmp .jpg .jpeg):
  *   hang     at rest or moving slowly

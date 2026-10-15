@@ -2,8 +2,9 @@
   "name": "spidey-hang",
   "productName": "Spidey Hang",
   "version": "1.0.0",
-  "description": "Spider-Man hangs upside down from a web on your desktop (Windows and macOS). Drag him and he swings.",
+  "description": "Spider-Man hangs upside down from a web on your desktop (Windows, macOS and Linux). Drag him and he swings.",
   "main": "src/main.js",
+  "desktopName": "spidey-hang.desktop",
   "private": true,
   "license": "MIT",
   "author": "Ashish Manhas",
@@ -18,7 +19,8 @@
     "test:e2e": "node test/e2e.js",
     "dist": "node scripts/dist.js",
     "dist:win": "node scripts/dist.js --win",
-    "dist:mac": "node scripts/dist.js --mac"
+    "dist:mac": "node scripts/dist.js --mac",
+    "dist:linux": "node scripts/dist.js --linux"
   },
   "devDependencies": {
     "electron": "44.4.5",
@@ -82,6 +84,27 @@
     "dmg": {
       "artifactName": "${productName}-${version}-${arch}.${ext}",
       "writeUpdateInfo": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Utility",
+      "maintainer": "Ashish Manhas",
+      "synopsis": "Spider-Man hangs from a web on your desktop",
+      "executableArgs": [
+        "--ozone-platform=x11"
+      ],
+      "syncDesktopName": true
+    },
+    "deb": {
+      "artifactName": "${name}_${version}_${arch}.${ext}"
     },
     "publish": null
   }

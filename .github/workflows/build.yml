@@ -56,6 +56,10 @@ jobs:
             os: macos-latest
             script: dist:mac
             files: dist/*.dmg
+          - name: Linux
+            os: ubuntu-latest
+            script: dist:linux
+            files: dist/*.deb
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write # only used to attach the installers to a release on a v* tag

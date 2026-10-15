@@ -1,9 +1,9 @@
 'use strict';
 /*
- * "npm run dist", "dist:win" and "dist:mac": runs electron-builder with the given arguments, then
- * starts the app that was just built, so Spidey appears as soon as the build is done. electron-builder
- * only writes the installer; this starts the unpacked copy it builds on the way (dist/win-unpacked on
- * Windows, dist/mac-arm64 or dist/mac on a Mac).
+ * "npm run dist", "dist:win", "dist:mac" and "dist:linux": runs electron-builder with the given
+ * arguments, then starts the app that was just built, so Spidey appears as soon as the build is done.
+ * electron-builder only writes the installer; this starts the unpacked copy it builds on the way
+ * (dist/win-unpacked on Windows, dist/mac-arm64 or dist/mac on a Mac, dist/linux-unpacked on Linux).
  *
  * A Spidey that is already running (an older installed copy, or the last build) is closed first,
  * because only one runs at a time and a second start would just give the old one a swing.
