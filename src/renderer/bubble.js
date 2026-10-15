@@ -99,14 +99,6 @@
       const shift = side === 'left' ? '-100%' : '0px';
       this.el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(${shift}, -100%)`;
     }
-
-    contains(pt) {
-      if (!this.visible) {
-        return false;
-      }
-      const r = this.el.getBoundingClientRect();
-      return pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
-    }
   }
 
   (root.SH || (root.SH = {})).bubble = { Bubble, MAX_WIDTH: 240 };

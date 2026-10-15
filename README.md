@@ -219,6 +219,12 @@ catch the mouse; everywhere else clicks fall through to whatever is underneath. 
 pointer is over a picture means reading a pixel back from the canvas, which is slow, so that is only
 done when the pointer is within reach of him.
 
+Linux does not tell a window that lets clicks through where the pointer is (and on Wayland an X11 app
+cannot see the pointer over other apps at all), so there the window is shaped instead: each frame the
+scene is drawn small, and the window keeps only the squares with something drawn in them, grown a
+little (more while he moves fast, so he never outruns the shape). The desktop then sends clicks on
+him to Spidey and everything else straight through (`src/renderer/shared/shape.js`).
+
 ## Develop and test
 
 ```bash

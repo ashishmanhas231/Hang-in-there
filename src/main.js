@@ -134,10 +134,6 @@ function start() {
   reminderClock = new reminders.ReminderClock(() => ({ water: settings.WaterReminder, lunch: settings.LunchReminder, custom: settings.CustomReminders }), remind);
   reminderClock.start();
 
-  if (process.platform === 'linux') {
-    followCursor();
-  }
-
   for (const event of ['display-metrics-changed', 'display-added', 'display-removed']) {
     screen.on(event, () => {
       clearTimeout(layoutTimer);
@@ -238,9 +234,32 @@ ipcMain.on('ready', (event) => {
 
 ipcMain.on('ignore-mouse', (event, ignore) => {
   const win = windowOf(event);
-  if (win) {
+  // Not on Linux, which shapes the window instead ('mouse-shape').
+  if (win && !isLinux) {
     win.setIgnoreMouseEvents(!!ignore, { forward: true });
   }
+});
+
+/**
+ * Linux: the parts of the window that catch the mouse (renderer/shared/shape.js). Linux does not pass
+ * on mouse moves to a window that lets clicks through, so the page could never tell when the pointer
+ * came over him; instead the desktop sends clicks inside this shape to him and the rest straight on.
+ */
+ipcMain.on('mouse-shape', (event, rects) => {
+  const win = windowOf(event);
+  if (!win || !isLinux || !Array.isArray(rects) || rects.length > 2000) {
+    return;
+  }
+  const clean = rects
+    .map((r) => ({ x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }))
+    .filter((r) => [r.x, r.y, r.width, r.height].every(Number.isFinite) && r.width > 0 && r.height > 0);
+  if (clean.length === 0) {
+    // Nothing drawn. An empty shape would make the whole window catch the mouse.
+    win.setIgnoreMouseEvents(true);
+    return;
+  }
+  win.setShape(clean);
+  win.setIgnoreMouseEvents(false);
 });
 
 ipcMain.on('menu', (event) => showMenuAtCursor(windowOf(event)));
@@ -270,27 +289,6 @@ ipcMain.on('snapshot-data', (_event, data) => {
     log.write(`Snapshot failed: ${err.message}`);
   }
 });
-
-/**
- * Windows and macOS forward mouse moves to a window that lets clicks through, so the page can tell
- * when the pointer is over him. Linux does not, so there the pointer is polled and passed on instead.
- */
-function followCursor() {
-  let last = '';
-  setInterval(() => {
-    const win = hangWin;
-    if (!win || win.isDestroyed() || !win.isVisible()) {
-      return;
-    }
-    const pt = screen.getCursorScreenPoint();
-    const b = win.getBounds();
-    const key = `${pt.x},${pt.y},${b.x},${b.y}`;
-    if (key !== last) {
-      last = key;
-      win.webContents.send('cursor', { x: pt.x - b.x, y: pt.y - b.y });
-    }
-  }, 40);
-}
 
 // ---- Layout and looks ------------------------------------------------------------------------
 
@@ -325,7 +323,7 @@ function applyLayout() {
   lastLayout = { left, top: area.y, width, height, work: { x: area.x, y: area.y, width: area.width, height: area.height }, anchorX, rope, body };
   log.write(`Layout: screen ${area.x}..${area.x + area.width}, web at ${Math.round(anchorX)} (saved spot ${Math.round(asked)}), ` +
     `window ${left}..${left + width}, rope ${Math.round(rope)}, swing on his own ${settings.AutoSwing}`);
-  post(hangWin, 'setup', { layout: { ...lastLayout }, flags: flags(), look: buildLook() });
+  post(hangWin, 'setup', { layout: { ...lastLayout }, flags: flags(), look: buildLook(), shapeMouse: isLinux });
 }
 
 const flags = () => ({ breeze: settings.Breeze, autoSwing: settings.AutoSwing });

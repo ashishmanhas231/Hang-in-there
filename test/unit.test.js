@@ -404,6 +404,45 @@ test('after a build, the unpacked app for this system is found to start', () => 
   assert.equal(findBuiltApp(dist, 'linux', 'x64'), linuxExe);
 });
 
+test('Linux: the mouse shape covers what is drawn, grown by the padding, and nothing else', () => {
+  const { rectsFromAlpha } = require(path.join(D, 'renderer/shared/shape.js'));
+  const cols = 20;
+  const rows = 10;
+  const alpha = new Uint8ClampedArray(cols * rows * 4);
+  const ink = (c, r) => (alpha[(r * cols + c) * 4 + 3] = 40);
+  assert.deepEqual(rectsFromAlpha(alpha, cols, rows, 8, 1), [], 'nothing drawn, nothing covered');
+
+  // A 2x3 block of cells, padded by one cell all round: one rectangle, 4 cells wide and 5 tall.
+  for (let r = 3; r < 6; r++) {
+    ink(5, r);
+    ink(6, r);
+  }
+  assert.deepEqual(rectsFromAlpha(alpha, cols, rows, 8, 1), [{ x: 32, y: 16, width: 32, height: 40 }]);
+
+  // A second mark far away is a second rectangle, and padding stops at the window edge.
+  ink(19, 0);
+  const rects = rectsFromAlpha(alpha, cols, rows, 8, 1);
+  assert.equal(rects.length, 2);
+  assert.deepEqual(rects.find((r) => r.x === 144), { x: 144, y: 0, width: 16, height: 16 });
+
+  // Every inked cell is inside a rectangle, and every rectangle is inside the window.
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (alpha[(r * cols + c) * 4 + 3] > 0) {
+        assert.ok(rects.some((q) => c * 8 >= q.x && c * 8 < q.x + q.width && r * 8 >= q.y && r * 8 < q.y + q.height), `cell ${c},${r}`);
+      }
+    }
+  }
+  for (const q of rects) {
+    assert.ok(q.x >= 0 && q.y >= 0 && q.x + q.width <= cols * 8 && q.y + q.height <= rows * 8);
+  }
+  // Standing still it grows by the usual padding; moving fast, by more, up to a limit.
+  const { padCells, PAD, MAX_PAD } = require(path.join(D, 'renderer/shared/shape.js'));
+  assert.equal(padCells(0), PAD);
+  assert.ok(padCells(25) > padCells(5));
+  assert.equal(padCells(10000), MAX_PAD);
+});
+
 test('Linux: a Wayland desktop starts again under X11, once; X11 desktops and other systems never do', () => {
   const { needsX11Restart, X11_SWITCH } = require(path.join(D, 'lib/linux.js'));
   const argv = ['/opt/Spidey Hang/spidey-hang', '--at-login'];

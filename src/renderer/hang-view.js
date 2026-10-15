@@ -5,7 +5,7 @@
  * The window is transparent, always on top, and only as big as his swing needs. It ignores the mouse
  * (clicks fall through to the window underneath) except over him, the line and the knot: the main
  * process forwards mouse moves to this page, and the page switches mouse handling on while the pointer
- * is over something it drew.
+ * is over something it drew. On Linux the window is shaped to what is drawn instead (shared/shape.js).
  *
  * When he stops moving the frame loop stops, so he uses no CPU until something wakes him.
  *
@@ -54,6 +54,17 @@
   let lastHover = { x: 0, y: 0 };
   let lastHoverTime = -1;
   let ignoring = true;
+  /** Linux: the window catches the mouse only inside a shape sent with every frame (updateShape). */
+  let shaping = false;
+  let shapeMask = null;
+  let lastShape = '';
+  let lastShapeAnkle = null;
+  /**
+   * Linux: where and when he was last clicked. The nudge from a click moves him out from under the
+   * pointer, so the spot keeps catching the mouse long enough for the second click of a double-click.
+   */
+  let clickSpot = null;
+  const CLICK_SPOT_MS = 500;
 
   /** The trip across the screen in progress (travel.js), or null. */
   let travel = null;
@@ -94,6 +105,9 @@
     camera = null;
     layout = data.layout;
     flags = data.flags;
+    shaping = Boolean(data.shapeMouse);
+    lastShape = '';
+    lastShapeAnkle = null;
     sizeCanvas();
     rig.build(layout.width, layout.height, layout.anchorX - layout.left, layout.rope, layout.body);
     setVisibleArea();
@@ -157,6 +171,42 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     stage.draw(ctx);
+    updateShape();
+  }
+
+  /** Linux: sends the parts of the window that catch the mouse, when they change (shared/shape.js). */
+  function updateShape() {
+    if (!shaping || !layout) {
+      return;
+    }
+    const { CELL, rectsFromAlpha, rectAround, padCells } = SH.shape;
+    const cols = Math.ceil(layout.width / CELL);
+    const rows = Math.ceil(layout.height / CELL);
+    if (!shapeMask || shapeMask.canvas.width !== cols || shapeMask.canvas.height !== rows) {
+      shapeMask = new OffscreenCanvas(cols, rows).getContext('2d', { willReadFrequently: true });
+    }
+    shapeMask.setTransform(1, 0, 0, 1, 0, 0);
+    shapeMask.clearRect(0, 0, cols, rows);
+    shapeMask.setTransform(1 / CELL, 0, 0, 1 / CELL, 0, 0);
+    stage.draw(shapeMask);
+    const moved = lastShapeAnkle ? Math.hypot(rig.ankle.x - lastShapeAnkle.x, rig.ankle.y - lastShapeAnkle.y) : 0;
+    lastShapeAnkle = { x: rig.ankle.x, y: rig.ankle.y };
+    const rects = rectsFromAlpha(shapeMask.getImageData(0, 0, cols, rows).data, cols, rows, CELL, padCells(moved));
+    if (!rig.free) {
+      // The knot, which is grabbed a little beyond what is drawn of it (Rig.nearAnchor).
+      rects.push(rectAround({ left: rig.anchor.x - 18, top: 0, right: rig.anchor.x + 18, bottom: rig.anchor.y + 18 }));
+    }
+    if (bubble.visible) {
+      rects.push(rectAround(bubble.el.getBoundingClientRect(), 28)); // and its shadow (overlay.css)
+    }
+    if (clickSpot && performance.now() - clickSpot.at < CLICK_SPOT_MS) {
+      rects.push(rectAround({ left: clickSpot.x, top: clickSpot.y, right: clickSpot.x, bottom: clickSpot.y }, 20));
+    }
+    const key = JSON.stringify(rects);
+    if (key !== lastShape) {
+      lastShape = key;
+      api.send('mouse-shape', rects);
+    }
   }
 
   function frame(nowMs) {
@@ -357,6 +407,7 @@
   }
 
   bubble.onHidden = () => {
+    updateShape(); // Linux: the bubble no longer catches the mouse
     if (waiting.length) {
       setTimeout(() => showReminder(waiting.shift()), 500);
     }
@@ -493,6 +544,7 @@
       const now = performance.now();
       double = now - lastClick < DOUBLE_CLICK_MS;
       lastClick = double ? -Infinity : now;
+      clickSpot = { x: pt.x, y: pt.y, at: now };
       if (!double) {
         rig.kick(0.9, pt.x < (rig.ankle.x + rig.head.x) / 2 ? 1 : -1);
       }
@@ -614,20 +666,6 @@
   api.on('push', (data) => {
     rig.kick(typeof data.strength === 'number' ? data.strength : 1);
     wake();
-  });
-  api.on('cursor', (pt) => {
-    // Linux only: the pointer position, polled by the main process (see followCursor in main.js).
-    if (layout && !dragged && !draggingAnchor) {
-      if (bubble.contains(pt)) {
-        if (ignoring) {
-          ignoring = false;
-          api.send('ignore-mouse', false);
-        }
-        return;
-      }
-      brushPast(pt);
-      updateHit(pt);
-    }
   });
   api.on('remind', (data) => showReminder(data.text));
   api.on('travel', () => startTravel());
