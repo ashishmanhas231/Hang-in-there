@@ -67,7 +67,9 @@ naturally from that hand.
 Pick a hero from **Hero** in the right-click menu, or run `Spidey: Choose Hero...` in VS Code.
 **Hero > Change hero every** rotates through them on a timer.
 
-This project ships no hero pictures, only the drawn Spider-Man. You add your own.
+The `.vsix` ships no hero pictures, only the drawn Spider-Man. This repository keeps copies of some
+Marvel pictures in `heroes/` (see [Artwork](#artwork)). Copy the folders you want into
+`%USERPROFILE%\.spidey-hang\heroes\`, or add your own.
 
 Each hero is a folder in `%USERPROFILE%\.spidey-hang\heroes\`. The folder name is the menu name.
 Use PNGs with a see-through background. Pictures are picked by file name:
@@ -232,12 +234,15 @@ rope, and rope stretch over time.
 
 ## Artwork
 
-This repository contains no third-party artwork, and neither does the `.vsix`. Spider-Man is
-drawn by code (`desktop/SpideyArt.cs`).
+The code is original. Spider-Man is drawn by code (`desktop/SpideyArt.cs`), and the `.vsix` carries
+no pictures.
 
-Any hero pictures you add stay in your own `%USERPROFILE%\.spidey-hang\heroes` folder, for your own
-PC. Do not commit or share that folder. This includes pictures from Hangly, whose NOTICE.md marks
-all its charm artwork "all rights reserved".
+`heroes/` and `pictures/` hold pictures of Marvel characters, kept here as a personal backup. They
+belong to Marvel and Disney and are not covered by the MIT licence. Some emblems may come from
+Hangly, whose NOTICE.md marks all its charm artwork "all rights reserved".
+
+**Keep this repository private.** Before it is ever made public, delete `heroes/` and `pictures/`
+and purge them from the git history. See `heroes/NOTICE.md`.
 
 Hangly's ropes are drawn by code, not from pictures. This project follows the same idea in its own code.
 
@@ -245,4 +250,4 @@ Hangly's ropes are drawn by code, not from pictures. This project follows the sa
 
 Spider-Man is a Marvel character. This is an unofficial fan project for personal fun. It is not
 affiliated with or endorsed by Marvel or Disney. The code is MIT licensed. That licence does not
-cover the character.
+cover the character or the pictures in `heroes/` and `pictures/`.

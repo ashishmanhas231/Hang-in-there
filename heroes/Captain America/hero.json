@@ -1,0 +1,8 @@
+{
+  "line": "cable",
+  "moves": "captain",
+  "poses": {
+    "stand": { "points": { "hand": [584, 560] } },
+    "throw": { "points": { "hand": [788, 440] } }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "line": "chain",
+  "moves": "hulk",
+  "poses": {
+    "roar": { "facesLeft": true }
+  }
+}

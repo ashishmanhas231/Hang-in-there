@@ -1,0 +1,10 @@
+{
+  "line": "none",
+  "moves": "ironman",
+  "poses": {
+    "hover": { "points": { "thrusters": [[80, 1393], [505, 1117], [150, 603], [795, 612]] } },
+    "fly": { "thrustAngle": 158, "points": { "thrusters": [[37, 596], [452, 887], [795, 365], [1029, 967]] } },
+    "land": { "facesLeft": true },
+    "blast": { "thrustAngle": 115, "points": { "palm": [955, 640], "thrusters": [[160, 1325]] } }
+  }
+}

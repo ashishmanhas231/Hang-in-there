@@ -1,0 +1,9 @@
+{
+  "line": "none",
+  "moves": "thor",
+  "poses": {
+    "stand": { "facesLeft": true, "points": { "hammer": [65, 840] } },
+    "summon": { "facesLeft": true, "points": { "hammer": [315, 120] } },
+    "land": { "facesLeft": true, "points": { "hammer": [323, 1100] } }
+  }
+}

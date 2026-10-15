@@ -4,9 +4,9 @@ obj/
 dist/
 *.vsix
 
-# Personal hero pictures and settings, in case a copy lands in here by mistake.
-# They belong in %USERPROFILE%\.spidey-hang and must never be published.
-heroes/
+# Your personal folder (settings, log, other pictures), in case a copy lands in here by mistake.
+# It belongs in %USERPROFILE%\.spidey-hang and must never be published.
+# The Marvel pictures kept on purpose are in heroes/ and pictures/. See heroes/NOTICE.md.
 spidey-hang-personal/
 .spidey-hang/
 
