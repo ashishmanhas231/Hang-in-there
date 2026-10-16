@@ -28,7 +28,7 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 .webnote[hidden] { display: none; }
 .webnote.in { opacity: 1; }
 .webnote.out { opacity: 0; transition: opacity 0.35s ease-in; }
-.webnote-patch { box-sizing: border-box; max-width: 62%; padding: 12px 16px 14px; background: #f7f8fa; border: 1.5px solid #101018; border-radius: 18px 14px 20px 13px; box-shadow: 0 3px 12px rgba(8, 10, 16, 0.35); text-align: center; font: 700 17px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; color: #15161a; -webkit-font-smoothing: antialiased; overflow-wrap: break-word; }
+.webnote-patch { box-sizing: border-box; max-width: 56%; padding: 14px 20px 16px; background: #f7f8fa; border: 1.5px solid #101018; border-radius: 18px 14px 20px 13px; box-shadow: 0 3px 12px rgba(8, 10, 16, 0.35); text-align: center; font: 700 20px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; color: #15161a; -webkit-font-smoothing: antialiased; overflow-wrap: break-word; }
 .webnote-label { margin-bottom: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #a3121f; }
 .webnote-text { min-height: 1.3em; }
 .webnote-caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 1px; vertical-align: -0.15em; background: #a3121f; }

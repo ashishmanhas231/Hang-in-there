@@ -42,6 +42,8 @@
   /** A reminder's thwip: its web takes this long from his hand to the bubble, then fades out. */
   const THWIP_SECONDS = 0.15;
   const THWIP_FADE = 0.3;
+  /** A new web's splat bursts open over this long. */
+  const SPLAT_SECONDS = 0.18;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const smooth = (v) => {
     const k = clamp(v, 0, 1);
@@ -123,6 +125,9 @@
       /** In the air, the new web on its way up (from travel.js): { x, y, share } in window units, or null. */
       this.aim = null;
       this.hadAim = false;
+      /** Where the web was tied last frame, and how long ago a new one stuck (its splat opening), or null. */
+      this.lastAnchorX = null;
+      this.splatAge = null;
       /** Just caught: the web's end moving from his shooting hand to where he holds it, { age }, or null. */
       this.handover = null;
     }
@@ -147,7 +152,7 @@
 
     get settled() {
       return Math.abs(this.armOffset) < 0.002 && this.snap === null && this.candidate === null &&
-        this.letGo === null && this.aim === null && this.handover === null && this.stretch === null &&
+        this.letGo === null && this.aim === null && this.handover === null && this.stretch === null && this.splatAge === null &&
         Math.abs(this.sway) < 0.0015 && Math.abs(this.swayV) < 0.01 && this.tether === null;
     }
 
@@ -166,6 +171,9 @@
 
     /** The window moved by -dx: keeps what the stage remembers in window units in place on screen. */
     shiftBy(dx) {
+      if (this.lastAnchorX !== null) {
+        this.lastAnchorX += dx;
+      }
       if (this.letGo) {
         for (const p of this.letGo.line) {
           p.x += dx;
@@ -232,6 +240,17 @@
         this.tether.age = this.reducedMotion ? Infinity : this.tether.age + frameDt;
         if (this.tether.age >= THWIP_SECONDS + THWIP_FADE) {
           this.tether = null;
+        }
+      }
+      const anchorX = this.rig.anchor.x;
+      if (!this.rig.free && this.lastAnchorX !== null && Math.abs(anchorX - this.lastAnchorX) > 20 && !this.reducedMotion) {
+        this.splatAge = 0; // tied somewhere new: a new web stuck there
+      }
+      this.lastAnchorX = this.rig.free ? this.lastAnchorX : anchorX;
+      if (this.splatAge !== null) {
+        this.splatAge += frameDt;
+        if (this.splatAge >= SPLAT_SECONDS) {
+          this.splatAge = null;
         }
       }
       const aiming = this.aim !== null && this.aim.share > 0;
@@ -393,6 +412,9 @@
       const webInFront = Boolean(this.lookValue && this.shown && this.shown.gripped);
       if (line && !webInFront) {
         this.drawLine(ctx, line);
+      }
+      if (free && line && this.aim && this.aim.share < 1) {
+        drawBlob(ctx, line[0].x, line[0].y, this.ropeWidth * 0.9); // the sticky end, still flying
       }
       if (!free) {
         this.drawTopFitting(ctx);
@@ -603,7 +625,23 @@
       if (!aim || aim.share <= 0) {
         return null;
       }
-      return straightLine(this.handPoint(), aim, aim.share, this.buffer('aim', 17));
+      // On its way the new web is slack and wavy; it pulls straight as it reaches the top.
+      const line = straightLine(this.handPoint(), aim, aim.share, this.buffer('aim', 17));
+      const tip = line[0];
+      const end = line[16];
+      const dx = tip.x - end.x;
+      const dy = tip.y - end.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const loose = 1 - aim.share * aim.share;
+      for (let i = 1; i < 16; i++) {
+        const t = i / 16;
+        const off = (Math.sin(Math.PI * t) * len * 0.07 + Math.sin(t * Math.PI * 5 + aim.share * 9) * len * 0.012) * loose;
+        line[i].x += nx * off;
+        line[i].y += ny * off;
+      }
+      return line;
     }
 
     /**
@@ -639,17 +677,37 @@
       }
       const { age, line } = this.letGo;
       const t = Math.min(1, age / LET_GO_SECONDS);
+      // Let go, the web goes slack: its loose end drops and swings in under the splat as it fades.
+      const slack = this.buffer('letGo', line.length);
+      const top = line[0];
+      for (let i = 0; i < line.length; i++) {
+        const s = i / (line.length - 1);
+        slack[i].x = line[i].x + (top.x - line[i].x) * Math.min(1, age * 1.4) * 0.35 * s;
+        slack[i].y = line[i].y + 0.5 * 1400 * age * age * Math.pow(s, 1.4);
+      }
       ctx.save();
-      ctx.globalAlpha = (1 - t) * (1 - t);
-      this.drawLine(ctx, line);
-      drawSplat(ctx, line[0].x, line[0].y, this.ropeWidth);
+      ctx.globalAlpha *= (1 - t) * (1 - t);
+      this.drawLine(ctx, slack);
+      drawSplat(ctx, top.x, top.y, this.ropeWidth);
       ctx.restore();
     }
 
     drawTopFitting(ctx) {
-      if (this.line !== 'none') {
-        drawSplat(ctx, this.rig.anchor.x, this.rig.anchor.y, this.ropeWidth);
+      if (this.line === 'none') {
+        return;
       }
+      if (this.splatAge !== null) {
+        // A new web has just stuck: its splat bursts open, overshooting a little.
+        const g = Math.min(1, this.splatAge / SPLAT_SECONDS);
+        const k = Math.max(0.05, 1 + 2.4 * (g - 1) ** 3 + 1.4 * (g - 1) ** 2);
+        ctx.save();
+        ctx.translate(this.rig.anchor.x, 0);
+        ctx.scale(k, 1);
+        drawSplat(ctx, 0, this.rig.anchor.y, this.ropeWidth);
+        ctx.restore();
+        return;
+      }
+      drawSplat(ctx, this.rig.anchor.x, this.rig.anchor.y, this.ropeWidth);
     }
 
     drawEndFitting(ctx) {

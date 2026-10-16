@@ -313,6 +313,39 @@ function workArea() {
 }
 
 /**
+ * Room for a Big web reminder: where the webs land and the window grown to take them in.
+ * In the middle of the screen, unless he hangs there: then beside him, on the side with more room.
+ */
+function webRoom(area, anchorX, body, left, right, tall) {
+  const size = Math.round(520 * Math.min(1, (area.height * 0.72) / 520, (area.width * 0.5) / 520));
+  let cx = area.x + area.width / 2;
+  const clear = size / 2 + body * 0.8 + 30;
+  if (Math.abs(anchorX - cx) < clear) {
+    cx = anchorX + (anchorX - area.x < area.x + area.width - anchorX ? clear : -clear);
+    cx = Math.max(area.x + size / 2 + 10, Math.min(area.x + area.width - size / 2 - 10, cx));
+  }
+  cx = Math.round(cx);
+  const cy = Math.round(area.y + area.height * 0.45);
+  left = Math.round(Math.min(left, cx - size / 2 - 40));
+  right = Math.round(Math.max(right, cx + size / 2 + 40));
+  tall = Math.round(Math.max(tall, Math.min(area.height, cy - area.y + size / 2 + 40)));
+  return { left, right, tall, web: { x: cx - left, y: cy - area.y, size } };
+}
+
+/** A Big web reminder came during a visit whose window has no room for it: the window grows, he stays put. */
+function growForWeb() {
+  if (!hangWin || hangWin.isDestroyed() || !lastLayout || lastLayout.web) {
+    return;
+  }
+  const area = workArea();
+  const room = webRoom(area, lastLayout.anchorX, lastLayout.body, lastLayout.left, lastLayout.left + lastLayout.width, lastLayout.height);
+  hangWin.setBounds({ x: room.left, y: area.y, width: room.right - room.left, height: room.tall });
+  lastLayout = { ...lastLayout, left: room.left, width: room.right - room.left, height: room.tall, web: room.web };
+  log.write(`Window grown for a big web: ${room.left}..${room.right}`);
+  post(hangWin, 'grow', { left: room.left, width: room.right - room.left, height: room.tall, web: room.web });
+}
+
+/**
  * Sizes and places the hanging window from the settings, then hangs him straight with a small swing.
  * extra: { arrive } he drops in from the top; { visit } his window is open only to deliver reminders;
  * { web } a Big web reminder may come, so the window also reaches the middle of the screen.
@@ -343,24 +376,10 @@ function applyLayout(extra = {}) {
   let tall = height;
   let web = null;
   if (extra.web) {
-    // The webs land in the middle of the screen: the window grows to take them in, only for the visit.
-    const size = Math.round(380 * Math.min(1, (area.height * 0.6) / 380, (area.width * 0.45) / 380));
-    // In the middle of the screen, unless he hangs there: then beside him, on the side with more room.
-    let cx = area.x + area.width / 2;
-    const clear = size / 2 + body * 0.8 + 30;
-    if (Math.abs(anchorX - cx) < clear) {
-      cx = anchorX + (anchorX - area.x < area.x + area.width - anchorX ? clear : -clear);
-      cx = Math.max(area.x + size / 2 + 10, Math.min(area.x + area.width - size / 2 - 10, cx));
-    }
-    cx = Math.round(cx);
-    const cy = Math.round(area.y + area.height * 0.45);
-    left = Math.min(left, cx - size / 2 - 40);
-    right = Math.max(right, cx + size / 2 + 40);
-    tall = Math.max(tall, Math.min(area.height, cy - area.y + size / 2 + 40));
-    web = { x: cx - left, y: cy - area.y, size };
+    ({ left, right, tall, web } = webRoom(area, anchorX, body, left, right, tall));
   }
   hangWin.setBounds({ x: left, y: area.y, width: right - left, height: tall });
-  lastLayout = { left, top: area.y, width: right - left, height: tall, work: { x: area.x, y: area.y, width: area.width, height: area.height }, anchorX, rope, body };
+  lastLayout = { left, top: area.y, width: right - left, height: tall, web, work: { x: area.x, y: area.y, width: area.width, height: area.height }, anchorX, rope, body };
   log.write(`Layout: screen ${area.x}..${area.x + area.width}, web at ${Math.round(anchorX)} (saved spot ${Math.round(asked)}), ` +
     `window ${left}..${right}, rope ${Math.round(rope)}, swing on his own ${settings.AutoSwing}${extra.visit ? ', a visit' : ''}${web ? ', big web' : ''}`);
   post(hangWin, 'setup', {
@@ -477,6 +496,9 @@ function remind({ kind, text, style }) {
   if (visiting && hangWin && !hangWin.isDestroyed()) {
     // Already here: it waits its turn in the same visit.
     clearTimeout(leaveTimer);
+    if (route === 'web') {
+      growForWeb();
+    }
     post(hangWin, 'remind', { kind, text, style: route });
     return;
   }
@@ -498,6 +520,9 @@ function startVisit() {
     // Still climbing out after being taken down: he comes back down for these, in the same window.
     clearTimeout(leaveTimer);
     visiting = true;
+    if (items.some((item) => item.style === 'web')) {
+      growForWeb();
+    }
     log.write(`Visit: he comes back down for ${items.length === 1 ? 'a reminder' : `${items.length} reminders`}`);
     for (const item of items) {
       post(hangWin, 'remind', item);
@@ -550,6 +575,7 @@ function leave() {
 
 /** Closes his window, which frees its page (most of the app's memory). */
 function closeOverlay() {
+  stopPointerWatch();
   clearTimeout(leaveTimer);
   leaveTimer = null;
   visiting = false;
@@ -583,6 +609,39 @@ ipcMain.on('gone', (event) => {
   if (windowOf(event) === hangWin && settings.Down) {
     closeOverlay();
   }
+});
+
+/**
+ * A Big web reminder's text is all there: moving the mouse anywhere now closes it. The overlay only
+ * hears the mouse over itself, so the pointer is checked 5 times a second, only until it closes.
+ */
+let pointerWatch = null;
+
+function stopPointerWatch() {
+  clearInterval(pointerWatch);
+  pointerWatch = null;
+}
+
+ipcMain.on('web-typed', (event) => {
+  const win = windowOf(event);
+  if (win !== hangWin) {
+    return;
+  }
+  stopPointerWatch();
+  const from = screen.getCursorScreenPoint();
+  const until = Date.now() + 15000; // it closes by itself well before this
+  pointerWatch = setInterval(() => {
+    if (!hangWin || hangWin.isDestroyed() || hangWin !== win || Date.now() > until) {
+      stopPointerWatch();
+      return;
+    }
+    const now = screen.getCursorScreenPoint();
+    if (Math.hypot(now.x - from.x, now.y - from.y) > 4) {
+      stopPointerWatch();
+      log.write('Mouse moved: Big web reminder closed');
+      post(hangWin, 'dismiss');
+    }
+  }, 200);
 });
 
 ipcMain.on('visit-done', (event) => {

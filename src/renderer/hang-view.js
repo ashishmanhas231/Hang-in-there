@@ -143,7 +143,27 @@
     if (arriving) {
       arriving.ready = true;
       wake();
+    } else if (waiting.length && !showing()) {
+      // Brought back while dropping in for a reminder: it is still delivered.
+      showReminder(waiting.shift());
     }
+  }
+
+  /** The window grew to make room for a Big web (main.js growForWeb): everything stays put on screen. */
+  function grow(data) {
+    if (!layout) {
+      return;
+    }
+    const dx = layout.left - data.left;
+    rig.shiftEverything(dx);
+    stage.shiftBy(dx);
+    layout.left = data.left;
+    layout.width = data.width;
+    layout.height = data.height;
+    webSpot = data.web;
+    sizeCanvas();
+    setVisibleArea();
+    wake();
   }
 
   /** What the shown look was made from, so the same look at the same size is not decoded again. */
@@ -472,6 +492,8 @@
   /** The Big web reminder (shared/webshot.js), shown only on a visit while he is taken down. */
   const webshot = new SH.webshot.WebShot(document.getElementById('webnote'));
   webshot.onChange = () => wake();
+  // Once its text is all there, the main process closes it when the mouse moves anywhere on screen.
+  webshot.onTyped = () => api.send('web-typed');
   webshot.onDone = () => {
     updateShape(); // Linux: the web no longer catches the mouse
     wake();
@@ -578,6 +600,8 @@
 
   /** How fast the rope plays out or reels in as he drops in or climbs out (per physics step). */
   const DROP_EASE = 0.02;
+  /** Climbing out is quicker: gone in well under a second. */
+  const CLIMB_EASE = 0.05;
 
   /** Called each frame while he drops in: fades in, lowers himself, then delivers what is waiting. */
   function updateArrival(dt) {
@@ -628,7 +652,7 @@
     leaving = { age: 0, fadeAt: stage.reducedMotion ? 0 : null, sent: false };
     if (!stage.reducedMotion) {
       rig.ropeTarget = 6;
-      rig.ropeEase = DROP_EASE;
+      rig.ropeEase = CLIMB_EASE;
     }
     wake();
   }
@@ -639,14 +663,14 @@
       return;
     }
     leaving.age += dt;
-    if (leaving.fadeAt === null && (rig.ropeLength < 24 || leaving.age > 1.4)) {
+    if (leaving.fadeAt === null && (rig.ropeLength < layout.rope * 0.4 || leaving.age > 0.45)) {
       leaving.fadeAt = leaving.age;
     }
     if (leaving.fadeAt !== null) {
-      stage.opacity = 1 - Math.min(1, (leaving.age - leaving.fadeAt) / 0.3);
+      stage.opacity = 1 - Math.min(1, (leaving.age - leaving.fadeAt) / 0.22);
       if (stage.opacity <= 0 && !leaving.sent) {
         leaving.sent = true;
-        log('Climbed out');
+        log(`Climbed out (${leaving.age.toFixed(2)} s)`);
         api.send('gone');
       }
     }
@@ -917,6 +941,7 @@
   api.on('remind', (data) => showReminder({ text: data.text, style: data.style === 'web' ? 'web' : 'bubble' }));
   api.on('dismiss', () => dismiss());
   api.on('leave', () => leave());
+  api.on('grow', (data) => grow(data));
   api.on('travel', () => startTravel());
   api.on('snapshot', (data) => snapshot(data.path));
   api.on('stats', () => logStats());
