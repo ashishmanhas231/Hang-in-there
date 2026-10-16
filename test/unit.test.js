@@ -158,6 +158,38 @@ test('a picture held by a grip ties on there, keeps its pose turned by tilt, and
   assert.equal(new IM.CustomFigure(IM.measureFigure(p.data, 200, 400, false, 150), false, null, 1).facePoint(), null);
 });
 
+test('a picture knows the hand new webs shoot from, turned with it, and has none unless hero.json names one', () => {
+  const p = fixtures.person([255, 0, 0, 255]); // box 10..190 x 20..390
+  const m = IM.measureFigure(p.data, 200, 400, false, 150, 1.3, { grip: { x: 100, y: 20 }, tilt: 90, hand: { x: 100, y: 120 } });
+  const hand = new IM.CustomFigure(m, false, null, 1).handPoint();
+  // 100 picture pixels below the grip, turned a quarter turn clockwise: to the left of it.
+  assert.ok(Math.abs(hand.x + 100 * m.scale) < 1e-9 && Math.abs(hand.y) < 1e-9, JSON.stringify(hand));
+  assert.equal(new IM.CustomFigure(IM.measureFigure(p.data, 200, 400, false, 150), false, null, 1).handPoint(), null);
+});
+
+test('a new web leaves from his hand, and after it catches slides to where he holds it', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  assert.deepEqual(stage.handPoint(), stage.at(rig.ankle), 'no hand: where he is tied on');
+  const figure = { size: { x: 60, y: 120 }, draw() {}, facePoint: () => null, handPoint: () => ({ x: 30, y: -40 }) };
+  stage.look = new HeroLook('x', 'web', { hang: figure });
+  const hand = stage.handPoint();
+  assert.ok(Math.hypot(hand.x - rig.ankle.x, hand.y - rig.ankle.y) > 40, 'away from the tie-on point');
+  stage.aim = { x: rig.ankle.x + 200, y: 0, share: 0.5 };
+  const line = stage.aimLine();
+  assert.ok(Math.hypot(line[line.length - 1].x - hand.x, line[line.length - 1].y - hand.y) < 1e-9, 'the shot starts at his hand');
+  stage.advance(1 / 60);
+  stage.aim = null; // caught
+  stage.advance(1 / 60);
+  assert.ok(stage.handover && !stage.settled, 'handing over');
+  const rope = stage.sampleRope();
+  stage.pullEndToHand(rope);
+  const end = rope[rope.length - 1];
+  assert.ok(Math.hypot(end.x - hand.x, end.y - hand.y) < Math.hypot(rig.ankle.x - hand.x, rig.ankle.y - hand.y), 'still near the hand');
+  for (let i = 0; i < 20; i++) stage.advance(1 / 60);
+  assert.equal(stage.handover, null);
+});
+
 // ---- Looks -----------------------------------------------------------------------------------
 
 test('missing poses fall back: grab and fly to swing, swing to hang', () => {
@@ -186,6 +218,150 @@ test('hit testing never reads a pixel back when the pointer is far from him', ()
   assert.equal(reads, 1);
 });
 
+// ---- Motion of a picture hero ----------------------------------------------------------------
+
+/** A picture that counts how often it is drawn. */
+function countingPicture(name) {
+  return { name, draws: 0, size: { x: 60, y: 120 }, draw() { this.draws++; }, facePoint: () => null, handPoint: () => null };
+}
+
+/** A canvas that only remembers its last scale. */
+function fakeContext() {
+  const ctx = { globalAlpha: 1, lastScale: null };
+  for (const name of ['save', 'restore', 'translate', 'rotate', 'beginPath', 'moveTo', 'lineTo', 'quadraticCurveTo', 'stroke', 'fill', 'ellipse']) {
+    ctx[name] = () => {};
+  }
+  ctx.scale = (x, y) => (ctx.lastScale = [x, y]);
+  ctx.createRadialGradient = () => ({ addColorStop() {} });
+  return ctx;
+}
+
+test('a pose change snaps: the old picture tucks in, the new one springs out past full size, one at a time', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  const hang = countingPicture('hang');
+  const swing = countingPicture('swing');
+  stage.look = new HeroLook('x', 'web', { hang, swing });
+  stage.dragging = true; // grab: shows at once, and falls back to the swing picture
+  stage.advance(1 / 60);
+  assert.equal(stage.shown, swing);
+  const seen = [];
+  for (let i = 0; i < 20; i++) {
+    const before = hang.draws + swing.draws;
+    const { picture, scale } = stage.pictureNow();
+    stage.draw(fakeContext());
+    assert.equal(hang.draws + swing.draws - before, 1, 'one picture per frame');
+    seen.push([picture.name, scale]);
+    stage.advance(1 / 60);
+  }
+  assert.equal(seen[0][0], 'hang', 'the old picture first');
+  assert.ok(seen.some(([n, k]) => n === 'hang' && k < 0.95), 'tucks in');
+  assert.ok(seen.some(([n, k]) => n === 'swing' && k > 1.02), 'springs out past full size');
+  assert.equal(stage.snap, null);
+  assert.deepEqual(stage.pictureNow(), { picture: swing, scale: 1 });
+});
+
+test('follow-through trails the swing by at most 6 degrees, and he still goes still', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  stage.look = new HeroLook('x', 'web', { hang: countingPicture('hang') });
+  rig.kick(3, 1);
+  let most = 0;
+  let t = 0;
+  for (let frame = 0; frame < 60 * 40; frame++) {
+    for (let i = 0; i < 4; i++) {
+      rig.simulate(t, false, false, null, null);
+      t += STEP;
+    }
+    stage.advance(1 / 60);
+    most = Math.max(most, Math.abs(stage.sway));
+  }
+  assert.ok(most > 0.01 && most <= (6 * Math.PI) / 180 + 1e-9, `sway peaked at ${most}`);
+  assert.ok(rig.motion() < 0.02 && stage.settled, 'settled');
+});
+
+test('a jerk stretches a picture a little for under half a second; never the drawing, never with reduced motion', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  stage.jerk(1);
+  assert.equal(stage.stretch, null, 'the drawn figure keeps its shape');
+  stage.look = new HeroLook('x', 'web', { hang: countingPicture('hang') });
+  stage.jerk(1);
+  assert.ok(stage.stretchNow() > 1.04 && stage.stretchNow() <= 1.045 + 1e-9);
+  assert.equal(stage.settled, false);
+  for (let i = 0; i < 30; i++) stage.advance(1 / 60);
+  assert.equal(stage.stretch, null);
+  assert.equal(stage.stretchNow(), 1);
+  stage.reducedMotion = true;
+  stage.jerk(1);
+  assert.equal(stage.stretch, null);
+});
+
+test('reduced motion: poses change at once, with no snap', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  const swing = countingPicture('swing');
+  stage.look = new HeroLook('x', 'web', { hang: countingPicture('hang'), swing });
+  stage.reducedMotion = true;
+  stage.dragging = true;
+  stage.advance(1 / 60);
+  assert.equal(stage.snap, null);
+  assert.deepEqual(stage.pictureNow(), { picture: swing, scale: 1 });
+});
+
+test('a reminder thwip shoots from his hand to the bubble in 0.15 s, fades, and lets him go still', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  stage.look = new HeroLook('x', 'web', { hang: countingPicture('hang') });
+  stage.tether = { to: { x: 10, y: 10 }, age: 0 };
+  stage.advance(1 / 60);
+  assert.equal(stage.settled, false);
+  stage.draw(fakeContext());
+  for (let i = 0; i < 30; i++) stage.advance(1 / 60);
+  assert.equal(stage.tether, null, 'gone after the fade');
+  assert.equal(stage.settled, true);
+  stage.reducedMotion = true;
+  stage.tether = { to: { x: 10, y: 10 }, age: 0 };
+  stage.advance(1 / 60);
+  assert.equal(stage.tether, null, 'no thwip with reduced motion');
+});
+
+test('hover reads a pixel only inside the picture, turned as it is drawn', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  const p = fixtures.person([255, 0, 0, 255]); // box 10..190 x 20..390
+  const m = IM.measureFigure(p.data, 200, 400, false, 150);
+  stage.look = new HeroLook('x', 'web', { hang: new IM.CustomFigure(m, false, null, 1) });
+  let reads = 0;
+  const alphaAt = () => {
+    reads++;
+    return 255;
+  };
+  const ankle = stage.at(rig.ankle);
+  // Just beside the picture, though well within its diagonal of the tie-on point: no pixel read.
+  assert.equal(stage.hitTest({ x: ankle.x + m.box.width * m.scale, y: ankle.y + 20 }, alphaAt), false);
+  assert.equal(reads, 0);
+  // On him: one pixel read.
+  assert.equal(stage.hitTest({ x: ankle.x, y: ankle.y + m.box.height * m.scale * 0.5 }, alphaAt), true);
+  assert.equal(reads, 1);
+});
+
+test('drawing a frame reuses its lists of points: nothing new is allocated as he moves', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  stage.look = new HeroLook('x', 'web', { hang: countingPicture('hang') });
+  const first = stage.sampleRope();
+  const copy = first.map((q) => ({ ...q }));
+  rig.kick(2, 1);
+  run(rig, 0.2);
+  stage.draw(fakeContext());
+  const again = stage.sampleRope();
+  assert.equal(again, first, 'the same list');
+  assert.ok(again.some((q, i) => q.x !== copy[i].x), 'with new points');
+  stage.letGoWeb();
+  assert.notEqual(stage.letGo.line, again, 'the web he let go of keeps its own copy');
+});
+
 // ---- Heroes ----------------------------------------------------------------------------------
 
 test('hero.json: comments, trailing commas, grip, tilt and face', () => {
@@ -205,19 +381,53 @@ test('hero.json: comments, trailing commas, grip, tilt and face', () => {
   assert.deepEqual(Object.keys(hero.poses).sort(), ['hang', 'swing']);
   assert.ok(hero.usable);
   assert.equal(hero.line, 'none');
-  assert.deepEqual(hero.poseSettings.hang, { grip: { x: 1, y: 2 }, face: { x: 3, y: 4 }, tilt: -7, faceSize: 40 });
+  assert.deepEqual(hero.poseSettings.hang, { grip: { x: 1, y: 2 }, face: { x: 3, y: 4 }, hand: null, tilt: -7, faceSize: 40, file: null });
 });
 
-test('the iconic heroes ship with the app, each with its face marked', () => {
+test('hero.json: a pose can borrow a picture from another hero folder, never from outside them', () => {
+  const home = tempHome();
+  const heroes = require(path.join(D, 'lib/heroes.js'));
+  const root = path.join(home, 'heroes');
+  for (const name of ['Lender', 'Borrower']) {
+    fs.mkdirSync(path.join(root, name), { recursive: true });
+  }
+  fs.writeFileSync(path.join(root, 'Lender', 'hang.png'), fixtures.person([255, 0, 0, 255]).png());
+  fs.writeFileSync(path.join(home, 'outside.png'), fixtures.person([0, 0, 255, 255]).png());
+  fs.writeFileSync(path.join(root, 'Borrower', 'hero.json'), JSON.stringify({ poses: {
+    hang: { file: '../Lender/hang.png', points: { hand: [5, 6] } },
+    swing: { file: '../../outside.png' },
+    fly: { file: '../Lender/missing.png' },
+  } }));
+  const hero = heroes.readFolder(path.join(root, 'Borrower'));
+  assert.deepEqual(Object.keys(hero.poses), ['hang']);
+  assert.equal(hero.poses.hang.file, path.join(root, 'Lender', 'hang.png'));
+  assert.deepEqual(hero.poseSettings.hang.hand, { x: 5, y: 6 });
+  assert.ok(hero.usable);
+});
+
+test('the heroes ship with the app, each with its face and hand marked', () => {
   const heroes = require(path.join(D, 'lib/heroes.js'));
   const list = heroes.scan();
   if (list.length === 0) {
-    return; // a checkout without the (git-ignored) pictures
+    return; // a checkout without the pictures
   }
-  assert.deepEqual(list.map((h) => h.name), ['Iconic Spidey - Both', 'Iconic Spidey - Upside Down', 'Iconic Spidey - Web Swing']);
-  assert.ok(list.every((h) => h.usable && h.poseSettings.hang && h.poseSettings.hang.face));
-  assert.deepEqual(Object.keys(heroes.find('iconic spidey - both').poses).sort(), ['hang', 'swing']);
-  assert.ok(heroes.find('Iconic Spidey - Web Swing').poseSettings.hang.grip, 'held by his fist');
+  assert.deepEqual(list.map((h) => h.name), ['Animated Spidey - Web Swing', 'Comic Spidey - Web Swing', 'Iconic Spidey - Both',
+    'Iconic Spidey - Upside Down', 'Iconic Spidey - Web Swing', 'Iron Spider - Web Swing']);
+  for (const hero of list) {
+    assert.ok(hero.usable, hero.name);
+    for (const [pose, { file }] of Object.entries(hero.poses)) {
+      const settings = hero.poseSettings[pose];
+      assert.ok(settings && settings.face && settings.hand, `${hero.name} ${pose}: face and hand`);
+      assert.ok(file.endsWith('.webp') && fs.existsSync(file), `${hero.name} ${pose}: ${file}`);
+    }
+  }
+  const both = heroes.find('iconic spidey - both');
+  assert.deepEqual(Object.keys(both.poses).sort(), ['hang', 'swing']);
+  assert.equal(both.poses.hang.file, heroes.find('Iconic Spidey - Upside Down').poses.hang.file, 'borrowed, not a copy');
+  assert.equal(both.poses.swing.file, heroes.find('Iconic Spidey - Web Swing').poses.hang.file, 'borrowed, not a copy');
+  for (const name of ['Iconic Spidey - Web Swing', 'Iron Spider - Web Swing', 'Animated Spidey - Web Swing', 'Comic Spidey - Web Swing']) {
+    assert.ok(heroes.find(name).poseSettings.hang.grip, `${name} is held by his fist`);
+  }
   assert.equal(heroes.find('nobody'), null);
   assert.equal(heroes.scan(), list, 'read once, then kept');
 });
@@ -464,7 +674,10 @@ test('custom reminders: messages, times and days are cleaned, broken ones droppe
   assert.equal(R.cleanCustom({ text: '   ' }), null);
   assert.equal(R.cleanCustom('stretch'), null);
   assert.deepEqual(R.cleanCustom({ id: 'a1', text: '  Stand   up ', type: 'daily', time: '7:05', days: [5, 1, 1, 9], on: false }),
-    { id: 'a1', text: 'Stand up', type: 'daily', time: '07:05', days: [1, 5], on: false });
+    { id: 'a1', text: 'Stand up', type: 'daily', time: '07:05', days: [1, 5], on: false, style: 'bubble' });
+  assert.equal(R.cleanCustom({ text: 'x', style: 'web' }).style, 'web');
+  assert.equal(R.cleanCustom({ text: 'x', type: 'every', style: 'web' }).style, 'web');
+  assert.equal(R.cleanCustom({ text: 'x', style: 'fireworks' }).style, 'bubble');
   assert.equal(R.cleanCustom({ text: 'x', time: '25:00' }).time, '09:00');
   assert.deepEqual(R.cleanCustom({ text: 'x', days: [] }).days, [0, 1, 2, 3, 4, 5, 6]);
   assert.equal(R.cleanCustom({ text: 'x', type: 'every', minutes: 1 }).minutes, R.MIN_EVERY);
@@ -508,7 +721,7 @@ test('custom reminders: due together with water or lunch, all are shown; switche
   const standup = R.cleanCustom({ id: 'u', text: 'Standup', type: 'daily', time: '10:15' });
 
   let next = R.nextReminders(at(10, 5), { water: true, lunch: true, custom: [stretch, standup] });
-  assert.deepEqual(next, { at: at(10, 15), items: [{ kind: 'custom', text: 'Standup', id: 'u' }] });
+  assert.deepEqual(next, { at: at(10, 15), items: [{ kind: 'custom', text: 'Standup', id: 'u', style: 'bubble' }] });
 
   next = R.nextReminders(at(10, 40), { water: true, lunch: true, custom: [stretch, standup] });
   assert.deepEqual(next.at, at(11, 0));
@@ -543,12 +756,33 @@ test('custom reminders: described in words, and the clock shows every one that i
   clock.stop();
 });
 
+test('a reminder shows as a big web only while he is taken down and it asks for one', () => {
+  const R = require(path.join(D, 'lib/reminders.js'));
+  assert.equal(R.reminderRoute({ down: true, style: 'web' }), 'web');
+  assert.equal(R.reminderRoute({ down: true, style: 'bubble' }), 'bubble');
+  assert.equal(R.reminderRoute({ down: true }), 'bubble', 'water, lunch and old reminders');
+  assert.equal(R.reminderRoute({ down: false, style: 'web' }), 'bubble', 'while he is up, always the bubble');
+  assert.equal(R.reminderRoute({ down: false, style: 'bubble' }), 'bubble');
+});
+
+test('settings: "taken down" starts off, is kept, and a wrong type in the file is ignored', () => {
+  tempHome();
+  const { Settings } = require(path.join(D, 'lib/settings.js'));
+  const s = new Settings();
+  assert.equal(s.Down, false);
+  s.Down = true;
+  s.save();
+  assert.equal(Settings.load().Down, true);
+  fs.writeFileSync(path.join(process.env.SPIDEY_HANG_HOME, 'settings.json'), JSON.stringify({ Down: 'yes' }));
+  assert.equal(Settings.load().Down, false);
+});
+
 test('settings: custom reminders are saved, and broken ones in the file are dropped', () => {
   tempHome();
   const { Settings, DEFAULTS } = require(path.join(D, 'lib/settings.js'));
   const s = new Settings();
   assert.deepEqual(s.CustomReminders, []);
-  s.CustomReminders = [{ id: 'w', text: 'Water the plants', type: 'daily', time: '18:00', days: [6], on: true }];
+  s.CustomReminders = [{ id: 'w', text: 'Water the plants', type: 'daily', time: '18:00', days: [6], on: true, style: 'web' }];
   s.save();
   assert.deepEqual(Settings.load().CustomReminders, s.CustomReminders);
   assert.deepEqual(DEFAULTS.CustomReminders, []);

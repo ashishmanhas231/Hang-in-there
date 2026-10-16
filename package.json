@@ -17,6 +17,7 @@
     "start": "electron .",
     "test": "node --test test/unit.test.js",
     "test:e2e": "node test/e2e.js",
+    "perf": "node scripts/perf.js",
     "dist": "node scripts/dist.js",
     "dist:win": "node scripts/dist.js --win",
     "dist:mac": "node scripts/dist.js --mac",

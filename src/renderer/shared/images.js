@@ -137,7 +137,10 @@
     // Scale so the visible part is heightShare body lengths tall, and never wider than 85% of that.
     let scale = (bodyLength * heightShare) / box.height;
     scale = Math.min(scale, (bodyLength * heightShare * 0.85) / box.width);
-    return { box, attachX, attachY, balanceDegrees, scale, gripped: Boolean(hold.grip), face: hold.face || null, faceSize: hold.faceSize || null };
+    return {
+      box, attachX, attachY, balanceDegrees, scale, gripped: Boolean(hold.grip),
+      face: hold.face || null, faceSize: hold.faceSize || null, hand: hold.hand || null,
+    };
   }
 
   /** A hanging picture, ready to draw with the tie-on point at (0, 0) and its weight toward +y. */
@@ -150,26 +153,48 @@
       this.gripped = Boolean(measure.gripped);
       this.attach = V.v(measure.attachX * measure.scale * pixelsPerDip, measure.attachY * measure.scale * pixelsPerDip);
       this.size = V.v(measure.box.width * measure.scale, measure.box.height * measure.scale);
-      // His face, in drawing units from the tie-on point before any turning (hero.json "face").
-      this.face = null;
-      if (measure.face) {
-        this.face = {
-          x: (measure.face.x - measure.box.x - measure.attachX) * measure.scale,
-          y: (measure.face.y - measure.box.y - measure.attachY) * measure.scale,
-          r: (measure.faceSize || 0) * measure.scale,
-        };
-      }
+      // Points of the picture (hero.json), in drawing units from the tie-on point before any turning.
+      const local = (p) => (p ? { x: (p.x - measure.box.x - measure.attachX) * measure.scale, y: (p.y - measure.box.y - measure.attachY) * measure.scale } : null);
+      /** His face, where reminder bubbles point, with its radius r. */
+      this.face = measure.face ? { ...local(measure.face), r: (measure.faceSize || 0) * measure.scale } : null;
+      /** The hand new webs shoot from. */
+      this.hand = local(measure.hand);
+    }
+
+    /** A point of the picture turned the way draw() turns it (or back, with direction -1). */
+    turned(p, direction = 1) {
+      const turn = direction * ((this.balanceDegrees * Math.PI) / 180 + (this.flip ? Math.PI : 0));
+      const c = Math.cos(turn);
+      const s = Math.sin(turn);
+      return { x: p.x * c - p.y * s, y: p.x * s + p.y * c };
     }
 
     /** Where his face is, turned the way draw() turns the picture, or null if the picture has no face set. */
     facePoint() {
-      if (!this.face) {
-        return null;
+      return this.face ? { ...this.turned(this.face), r: this.face.r } : null;
+    }
+
+    /** Where his web hand is, turned the way draw() turns the picture, or null if the picture has no hand set. */
+    handPoint() {
+      return this.hand ? this.turned(this.hand) : null;
+    }
+
+    /** True if a point (from the tie-on point, before the picture's tilt) is inside the picture's box. */
+    contains(p) {
+      const q = this.turned({ x: p.x, y: p.y }, -1);
+      const ppd = this.pixelsPerDip;
+      const width = this.bitmap ? this.bitmap.width : this.size.x * ppd;
+      const height = this.bitmap ? this.bitmap.height : this.size.y * ppd;
+      return q.x >= -this.attach.x / ppd && q.x <= (width - this.attach.x) / ppd &&
+        q.y >= -this.attach.y / ppd && q.y <= (height - this.attach.y) / ppd;
+    }
+
+    /** Frees the bitmap. */
+    close() {
+      if (this.bitmap && this.bitmap.close) {
+        this.bitmap.close();
       }
-      const turn = (this.balanceDegrees * Math.PI) / 180 + (this.flip ? Math.PI : 0);
-      const c = Math.cos(turn);
-      const s = Math.sin(turn);
-      return { x: this.face.x * c - this.face.y * s, y: this.face.x * s + this.face.y * c, r: this.face.r };
+      this.bitmap = null;
     }
 
     draw(ctx, opacity = 1) {
@@ -191,6 +216,7 @@
       const decoded = await decodePicture(bytes);
       const measure = measureFigure(decoded.data, decoded.width, decoded.height, flip, bodyLength, heightShare, hold);
       const bitmap = await makeBitmap(decoded, measure.box, measure.scale * pixelsPerDip);
+      decoded.bitmap.close(); // the full-size picture: only the screen-sized copy is kept
       return new CustomFigure(measure, flip, bitmap, pixelsPerDip);
     }
   }

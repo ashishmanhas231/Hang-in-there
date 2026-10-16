@@ -68,6 +68,14 @@
 
   /** The trip across the screen in progress (travel.js), or null. */
   let travel = null;
+  /** This window is open only to deliver reminders while he is taken down (a visit). */
+  let visit = false;
+  /** Where Big web reminders land, { x, y, size } in window units, or null when none can come. */
+  let webSpot = null;
+  /** Dropping in: { age, ready } (ready once his picture has loaded), or null. */
+  let arriving = null;
+  /** Climbing out: { age, fadeAt, sent }, or null. */
+  let leaving = null;
   /**
    * The window following him across the screen, or null: { x, v } its left edge (screen units, not
    * rounded) and speed, and with `to` set, a glide there carrying him along (reduced motion). It
@@ -112,18 +120,51 @@
     rig.build(layout.width, layout.height, layout.anchorX - layout.left, layout.rope, layout.body);
     setVisibleArea();
     stage.resetPose();
-    rig.kick(0.5);
+    visit = Boolean(data.visit);
+    webSpot = data.web || null;
+    leaving = null;
+    arriving = null;
+    rig.ropeEase = SH.rig.ROPE_EASE;
+    stage.opacity = 1;
+    if (data.arrive && !stage.reducedMotion) {
+      // He drops in from his web at the top: the rope starts reeled in and plays out.
+      rig.reel(12);
+      rig.ropeTarget = 0;
+      rig.ropeEase = DROP_EASE;
+      stage.opacity = 0;
+      arriving = { age: 0, ready: false };
+    } else if (data.arrive) {
+      arriving = { age: 0.25, ready: false };
+    } else {
+      rig.kick(0.5);
+    }
     wake();
     await applyLook(data.look);
+    if (arriving) {
+      arriving.ready = true;
+      wake();
+    }
   }
 
+  /** What the shown look was made from, so the same look at the same size is not decoded again. */
+  let lookKey = '';
+
   async function applyLook(look) {
+    const key = look && look.kind === 'hero'
+      ? JSON.stringify([look.name, Object.values(look.poses || {}).map((p) => p.file), rig.bodyLength, dpr])
+      : 'drawn';
+    if (key === lookKey && (key === 'drawn' ? !stage.look : stage.look)) {
+      lookRequest++; // anything still loading is out of date
+      wake();
+      return;
+    }
     const request = ++lookRequest;
     const loaded = await loadLook(look, rig.bodyLength, dpr, problem);
     if (request !== lookRequest) {
       return; // a newer look arrived while this one loaded
     }
     stage.look = loaded;
+    lookKey = loaded ? key : 'drawn';
     if (loaded) {
       log(`Look: ${loaded.name} (${Object.keys(loaded.poses).join(', ')}), line ${loaded.line}`);
     } else {
@@ -170,7 +211,12 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    webshot.drawWebs(ctx);
     stage.draw(ctx);
+    const shot = webshot.inFlight();
+    if (shot) {
+      stage.drawShot(ctx, shot.to, shot.share);
+    }
     updateShape();
   }
 
@@ -198,6 +244,9 @@
     }
     if (bubble.visible) {
       rects.push(rectAround(bubble.el.getBoundingClientRect(), 28)); // and its shadow (overlay.css)
+    }
+    if (webshot.active && !webshot.note.hidden) {
+      rects.push(rectAround(webshot.note.getBoundingClientRect(), 4));
     }
     if (clickSpot && performance.now() - clickSpot.at < CLICK_SPOT_MS) {
       rects.push(rectAround({ left: clickSpot.x, top: clickSpot.y, right: clickSpot.x, bottom: clickSpot.y }, 20));
@@ -243,6 +292,9 @@
       simTime += STEP;
     }
     follow(frameDt);
+    updateArrival(frameDt);
+    updateLeaving(frameDt);
+    webshot.advance(frameDt);
     stage.aim = travel ? travel.aim(layout.left) : null;
     stage.blend = accumulator / STEP;
     stage.dragging = dragged !== null;
@@ -252,7 +304,7 @@
 
     // 0.02 units per step is about 5 units a second: too slow to see.
     const still = !flags.breeze && !flags.autoSwing && !dragged && !draggingAnchor && !moving &&
-      rig.motion() < 0.02 && stage.settled;
+      !arriving && !leaving && webshot.settled && rig.motion() < 0.02 && stage.settled;
     quietTime = still ? quietTime + frameDt : 0;
     if (quietTime > 0.5) {
       rig.freeze();
@@ -267,6 +319,12 @@
   // ---- Swinging across the screen ------------------------------------------------------------
 
   const reducedMotion = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  stage.reducedMotion = reducedMotion();
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => {
+      stage.reducedMotion = reducedMotion();
+    });
+  }
 
   /** Sends him to the other side of the screen: web to web, or a calm glide with reduced motion. */
   function startTravel() {
@@ -300,8 +358,11 @@
     const event = travel.step(layout.left);
     if (event && event.type === 'release') {
       stage.letGoWeb();
-    } else if (event && event.type === 'catch' && event.last) {
-      landed(event.anchorX);
+    } else if (event && event.type === 'catch') {
+      stage.jerk(0.7); // the new web snaps taut
+      if (event.last) {
+        landed(event.anchorX);
+      }
     }
     if (travel.done) {
       if (travel.phase !== 'land') {
@@ -369,14 +430,11 @@
   // ---- Reminder bubble --------------------------------------------------------------------
 
   /**
-   * Keeps the bubble just above his face, whatever the pose: its tail points down at the upper
-   * corner of his face, on the side of the web with more screen to spare, and the whole bubble stays
-   * inside the visible part of the window. Follows him every frame as he swings.
+   * Where the bubble goes, { x, y, side }: (x, y) is the tip of its tail. Just above his face,
+   * whatever the pose: the tail points down at the upper corner of his face, on the side of the web
+   * with more screen to spare, and the whole bubble stays inside the visible part of the window.
    */
-  function placeBubble() {
-    if (!bubble.visible || !layout) {
-      return;
-    }
+  function bubbleSpot() {
     const face = stage.facePoint() || { x: rig.head.x, y: rig.head.y, r: layout.body * 0.12 };
     const lo = Math.max(0, rig.visibleLeft);
     const hi = Math.min(layout.width, rig.visibleRight);
@@ -386,51 +444,221 @@
     const x = side === 'left' ? Math.max(lo + room, face.x - reach) : Math.min(hi - room, face.x + reach);
     const tall = bubble.height || 60;
     const y = Math.max(tall + 6, Math.min(layout.height - 4, face.y - face.r * 0.85));
-    bubble.place(x, y, side);
+    return { x, y, side };
   }
 
-  /** Reminders that came while the bubble was up wait their turn, a few at most. */
+  /** Keeps the bubble (and the thwip on its way to it) with him, every frame as he swings. */
+  function placeBubble() {
+    if (!layout || (!bubble.visible && !stage.tether)) {
+      return;
+    }
+    const spot = bubbleSpot();
+    if (stage.tether) {
+      stage.tether.to = { x: spot.x, y: spot.y };
+    }
+    if (bubble.visible) {
+      bubble.place(spot.x, spot.y, spot.side);
+    }
+  }
+
+  /** Reminders that came while another was showing (or while he dropped in) wait their turn. */
   const waiting = [];
   const MAX_WAITING = 5;
 
-  function showReminder(text) {
-    if (bubble.visible) {
+  /** Thwip: a web shoots from his hand to where the bubble pops up above his head, then fades. */
+  const THWIP_MS = 160;
+  let opening = null;
+
+  /** The Big web reminder (shared/webshot.js), shown only on a visit while he is taken down. */
+  const webshot = new SH.webshot.WebShot(document.getElementById('webnote'));
+  webshot.onChange = () => wake();
+  webshot.onDone = () => {
+    updateShape(); // Linux: the web no longer catches the mouse
+    wake();
+    reminderClosed();
+  };
+
+  const showing = () => bubble.visible || opening !== null || webshot.active;
+
+  /** item: { text, style }. Waits while one is showing, while he drops in, or while he climbs out. */
+  function showReminder(item) {
+    if (typeof item === 'string') {
+      item = { text: item, style: 'bubble' };
+    }
+    if (leaving) {
+      // A reminder came as he was climbing out: he comes back down for it.
+      comeBack();
+    }
+    if (showing() || arriving) {
       if (waiting.length < MAX_WAITING) {
-        waiting.push(text);
+        waiting.push(item);
       }
       return;
     }
-    bubble.show(text);
-    placeBubble();
+    if (item.style === 'web' && webSpot) {
+      log('Reminder shown (web)');
+      webshot.prepare(webSpot, dpr);
+      webshot.start(item.text, stage.reducedMotion); // the webs catch the eye: no swing, so he goes still
+      wake();
+      return;
+    }
+    log('Reminder shown (bubble)');
     rig.kick(0.4); // a little swing to catch the eye
+    if (stage.hasHand() && layout) {
+      stage.tether = { to: { x: 0, y: 0 }, age: 0 };
+      placeBubble();
+      opening = setTimeout(() => {
+        opening = null;
+        bubble.show(item.text);
+        placeBubble();
+        wake();
+      }, stage.reducedMotion ? 0 : THWIP_MS);
+    } else {
+      bubble.show(item.text);
+      placeBubble();
+    }
     wake();
   }
 
-  bubble.onHidden = () => {
-    updateShape(); // Linux: the bubble no longer catches the mouse
+  /** One reminder has closed: the next one waiting, or, at the end of a visit, he climbs out. */
+  function reminderClosed() {
     if (waiting.length) {
       setTimeout(() => showReminder(waiting.shift()), 500);
+    } else if (visit && !leaving) {
+      api.send('visit-done');
     }
+  }
+
+  bubble.onHidden = () => {
+    stage.tether = null;
+    updateShape(); // Linux: the bubble no longer catches the mouse
+    wake(); // draw him once more
+    reminderClosed();
   };
 
-  // The bubble takes the mouse while the pointer is over it, so it can be clicked away.
-  bubble.el.addEventListener('mousemove', () => {
-    if (ignoring) {
-      ignoring = false;
-      api.send('ignore-mouse', false);
+  /** Closes whatever reminder is showing (a click on it, or the "dismiss" command). */
+  function dismiss() {
+    if (opening) {
+      // Still on its way: it never opens.
+      clearTimeout(opening);
+      opening = null;
+      stage.tether = null;
+      wake();
+      reminderClosed();
+    } else if (bubble.visible) {
+      bubble.hide();
+    } else if (webshot.active) {
+      webshot.close();
     }
-  });
-  bubble.el.addEventListener('mouseleave', () => {
-    if (!dragged && !draggingAnchor && !ignoring) {
-      ignoring = true;
-      api.send('ignore-mouse', true);
-    }
-  });
+  }
+
+  // The bubble and the Big web take the mouse while the pointer is over them, so they can be clicked away.
+  for (const el of [bubble.el, webshot.note]) {
+    el.addEventListener('mousemove', () => {
+      if (ignoring) {
+        ignoring = false;
+        api.send('ignore-mouse', false);
+      }
+    });
+    el.addEventListener('mouseleave', () => {
+      if (!dragged && !draggingAnchor && !ignoring) {
+        ignoring = true;
+        api.send('ignore-mouse', true);
+      }
+    });
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      api.send('menu');
+    });
+  }
   bubble.el.addEventListener('click', () => bubble.hide());
-  bubble.el.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    api.send('menu');
-  });
+  webshot.note.addEventListener('click', () => webshot.close());
+
+  // ---- Dropping in and climbing out (taken down: a visit) --------------------------------------
+
+  /** How fast the rope plays out or reels in as he drops in or climbs out (per physics step). */
+  const DROP_EASE = 0.02;
+
+  /** Called each frame while he drops in: fades in, lowers himself, then delivers what is waiting. */
+  function updateArrival(dt) {
+    if (!arriving) {
+      return;
+    }
+    if (!arriving.ready) {
+      stage.opacity = 0; // until his picture has loaded, so the drawing never flashes up
+      return;
+    }
+    if (!rig.ropeTarget) {
+      rig.ropeTarget = layout.rope;
+    }
+    arriving.age += dt;
+    stage.opacity = Math.min(1, arriving.age / 0.25);
+    if (rig.ropeLength >= layout.rope * 0.96 || arriving.age > 2.5) {
+      arriving = null;
+      stage.opacity = 1;
+      rig.ropeEase = SH.rig.ROPE_EASE;
+      stage.jerk(0.6); // the web takes his weight
+      log('Dropped in');
+      if (waiting.length) {
+        showReminder(waiting.shift());
+      } else if (visit) {
+        api.send('visit-done');
+      }
+    }
+  }
+
+  /** He climbs up to his web and out of sight, then says so; the main process closes the window. */
+  function leave() {
+    if (leaving || !layout) {
+      return;
+    }
+    waiting.length = 0;
+    clearTimeout(opening);
+    opening = null;
+    if (bubble.visible) {
+      bubble.hide();
+    }
+    webshot.close();
+    endTravel();
+    dragged = null;
+    draggingAnchor = false;
+    arriving = null;
+    // Taken down: from now on this window only delivers reminders, then climbs out again.
+    visit = true;
+    leaving = { age: 0, fadeAt: stage.reducedMotion ? 0 : null, sent: false };
+    if (!stage.reducedMotion) {
+      rig.ropeTarget = 6;
+      rig.ropeEase = DROP_EASE;
+    }
+    wake();
+  }
+
+  /** Called each frame while he climbs out. */
+  function updateLeaving(dt) {
+    if (!leaving) {
+      return;
+    }
+    leaving.age += dt;
+    if (leaving.fadeAt === null && (rig.ropeLength < 24 || leaving.age > 1.4)) {
+      leaving.fadeAt = leaving.age;
+    }
+    if (leaving.fadeAt !== null) {
+      stage.opacity = 1 - Math.min(1, (leaving.age - leaving.fadeAt) / 0.3);
+      if (stage.opacity <= 0 && !leaving.sent) {
+        leaving.sent = true;
+        log('Climbed out');
+        api.send('gone');
+      }
+    }
+  }
+
+  /** A reminder came while he climbed out: back down he comes. */
+  function comeBack() {
+    leaving = null;
+    stage.opacity = 1;
+    rig.ropeTarget = layout.rope;
+    arriving = { age: 0.25, ready: true };
+  }
 
   // ---- Frame timing record (the "stats" command) ------------------------------------------
 
@@ -438,9 +666,12 @@
   let statTime = 0;
   let statWorst = 0;
   let statSlow = 0;
+  /** Frames drawn since the "metrics" command started measuring. */
+  let metricFrames = 0;
 
   function recordFrame(frameDt) {
     statFrames++;
+    metricFrames++;
     statTime += frameDt;
     statWorst = Math.max(statWorst, frameDt);
     if (frameDt > 0.025) {
@@ -452,6 +683,16 @@
     const fps = statTime > 0 ? statFrames / statTime : 0;
     log(`Frames: ${statFrames} in ${statTime.toFixed(1)} s = ${fps.toFixed(1)} per second, worst gap ${Math.round(statWorst * 1000)} ms, dropped (gap over 25 ms) ${statSlow}, animating ${animating}, look ${stage.look ? stage.look.name : 'drawn'}, pose ${stage.currentPose}, rope angle ${(rig.ropeAngle * 180 / Math.PI).toFixed(1)}, web at ${layout ? Math.round(layout.left + rig.anchor.x) : '-'}`);
     statFrames = statTime = statWorst = statSlow = 0;
+  }
+
+  /** The "metrics" command: counts frames from its start, then reports them with the page's heap. */
+  function metrics(data) {
+    if (data.phase === 'start') {
+      metricFrames = 0;
+      return;
+    }
+    const heap = performance.memory ? performance.memory.usedJSHeapSize / (1024 * 1024) : null;
+    api.send('metrics-data', { id: data.id, frames: metricFrames, heapMB: heap, animating });
   }
 
   // ---- Mouse ----------------------------------------------------------------------------
@@ -473,7 +714,7 @@
     probe.setTransform(1, 0, 0, 1, 0, 0);
     probe.clearRect(0, 0, 1, 1);
     probe.setTransform(dpr, 0, 0, dpr, -px, -py);
-    stage.draw(probe);
+    stage.drawBody(probe); // the web and knot are tested by their shape (Stage.hitTest)
     return probe.getImageData(0, 0, 1, 1).data[3];
   }
 
@@ -548,6 +789,9 @@
       if (!double) {
         rig.kick(0.9, pt.x < (rig.ankle.x + rig.head.x) / 2 ? 1 : -1);
       }
+    }
+    if (dragged && dragMoved) {
+      stage.jerk(0.8); // let go: the web snaps taut
     }
     try {
       canvas.releasePointerCapture(e.pointerId);
@@ -653,6 +897,7 @@
     const c = canvas2.getContext('2d');
     c.fillStyle = 'rgb(40, 40, 40)';
     c.fillRect(0, 0, canvas2.width, canvas2.height);
+    webshot.drawWebs(c);
     stage.draw(c);
     const blob = await canvas2.convertToBlob({ type: 'image/png' });
     api.send('snapshot-data', { path, bytes: new Uint8Array(await blob.arrayBuffer()), status: `pose ${stage.currentPose}` });
@@ -664,13 +909,18 @@
   api.on('look', (data) => applyLook(data.look));
   api.on('flags', (data) => setFlags(data));
   api.on('push', (data) => {
-    rig.kick(typeof data.strength === 'number' ? data.strength : 1);
+    const strength = typeof data.strength === 'number' ? data.strength : 1;
+    rig.kick(strength);
+    stage.jerk(Math.min(1, strength));
     wake();
   });
-  api.on('remind', (data) => showReminder(data.text));
+  api.on('remind', (data) => showReminder({ text: data.text, style: data.style === 'web' ? 'web' : 'bubble' }));
+  api.on('dismiss', () => dismiss());
+  api.on('leave', () => leave());
   api.on('travel', () => startTravel());
   api.on('snapshot', (data) => snapshot(data.path));
   api.on('stats', () => logStats());
+  api.on('metrics', (data) => metrics(data));
 
   window.addEventListener('resize', () => {
     if (layout && (window.devicePixelRatio || 1) !== dpr) {
@@ -701,6 +951,10 @@
     travelling: travel !== null,
     gliding: camera !== null,
     bubble: bubble.visible,
+    web: webshot.active,
+    visit,
+    arriving: arriving !== null,
+    leaving: leaving !== null,
     face: stage.facePoint(),
     bubbleRect: bubble.visible ? bubble.el.getBoundingClientRect().toJSON() : null,
   });

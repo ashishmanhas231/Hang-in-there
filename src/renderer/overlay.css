@@ -22,6 +22,18 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 .bubble-dots i:nth-child(3) { animation-delay: 0.3s; margin-right: 0; }
 @keyframes bubble-blink { 50% { opacity: 0; } }
 @keyframes bubble-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
+/* The Big web reminder's text: a silk patch in the middle of the big web (shared/webshot.js). The
+   round element covers the whole web, so a click anywhere on it closes the reminder. */
+.webnote { position: absolute; left: 0; top: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transition: opacity 0.2s ease-out; }
+.webnote[hidden] { display: none; }
+.webnote.in { opacity: 1; }
+.webnote.out { opacity: 0; transition: opacity 0.35s ease-in; }
+.webnote-patch { box-sizing: border-box; max-width: 62%; padding: 12px 16px 14px; background: #f7f8fa; border: 1.5px solid #101018; border-radius: 18px 14px 20px 13px; box-shadow: 0 3px 12px rgba(8, 10, 16, 0.35); text-align: center; font: 700 17px/1.3 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; color: #15161a; -webkit-font-smoothing: antialiased; overflow-wrap: break-word; }
+.webnote-label { margin-bottom: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #a3121f; }
+.webnote-text { min-height: 1.3em; }
+.webnote-caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 1px; vertical-align: -0.15em; background: #a3121f; }
+.webnote.typed .webnote-caret { display: none; }
 @media (prefers-reduced-motion: reduce) {
+  .webnote, .webnote.out { transition: none; }
   .bubble-pop, .bubble.out .bubble-pop { transition: opacity 0.2s; transform: none; }
 }

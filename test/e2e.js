@@ -150,6 +150,81 @@ async function main() {
       await ipc.send('reset');
     });
 
+    await check('breeze on and off, and metrics writes CPU, memory and frames to the log', async () => {
+      await ipc.send('breeze on');
+      await logHas(/Breeze: true/);
+      await ipc.send('metrics 1');
+      await logHas(/Metrics over [\d.]+ s: CPU [\d.]+%, memory \d+ MB, processes \d+ \(.+\), page heap ([\d.]+ MB|-), frames \d+/);
+      await ipc.send('breeze off');
+      await logHas(/Breeze: false/);
+    });
+
+    await check('while he is up, every reminder is a bubble, even a Big web one', async () => {
+      await ipc.send('dismiss');
+      const bubbles = () => (logText().match(/Reminder shown \(bubble\)/g) || []).length;
+      const before = bubbles();
+      await ipc.send('remind-web Up here it is a bubble');
+      await logHas(/Reminder \(note\): Up here it is a bubble/);
+      await waitFor('a bubble', () => bubbles() > before, 15000);
+      assert.doesNotMatch(logText(), /Reminder shown \(web\)/);
+      await ipc.send('dismiss');
+    });
+
+    await check('take him down: he climbs out and his window closes; the app keeps running', async () => {
+      await ipc.send('down');
+      await logHas(/Taken down: he climbs out/);
+      await logHas(/Climbed out/);
+      await logHas(/Window closed/);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).Down, true);
+      assert.equal(await ipc.send('ping'), true);
+    });
+
+    await check('taken down, a bubble reminder: he drops in, says it, climbs out, the window closes', async () => {
+      const closed = (logText().match(/Window closed/g) || []).length;
+      await ipc.send('remind Drink some water');
+      await logHas(/Visit: he drops in for a reminder \(bubble\)/);
+      await logHas(/Dropped in/);
+      await logHas(/Reminder shown \(bubble\)/);
+      await ipc.send('dismiss');
+      await waitFor('the window to close again', () => (logText().match(/Window closed/g) || []).length > closed, 10000);
+    });
+
+    await check('taken down, a Big web reminder: three webs in the middle, then he climbs out', async () => {
+      const closed = (logText().match(/Window closed/g) || []).length;
+      await ipc.send('remind-web Stand up and stretch');
+      await logHas(/Visit: he drops in for a reminder \(web\)/);
+      await logHas(/big web/);
+      await logHas(/Reminder shown \(web\)/);
+      await sleep(2500); // the three webs land and the text is written
+      const file = path.join(home, 'web.png');
+      await ipc.send(`snapshot ${file}`);
+      await waitFor('snapshot of the webs', () => fs.existsSync(file));
+      await ipc.send('dismiss');
+      await waitFor('the window to close again', () => (logText().match(/Window closed/g) || []).length > closed, 10000);
+    });
+
+    await check('bring him back: he drops in and stays', async () => {
+      const looks = (logText().match(/Look: /g) || []).length;
+      await ipc.send('up');
+      await logHas(/Brought back/);
+      await waitFor('his look', () => (logText().match(/Look: /g) || []).length > looks);
+      await logHas(/Dropped in/);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).Down, false);
+    });
+
+    await check('a reminder due as he climbs out: he comes back down for it, then the one window closes', async () => {
+      const closed = (logText().match(/Window closed/g) || []).length;
+      await ipc.send('down');
+      await ipc.send('remind Just one more thing');
+      await logHas(/Visit: he comes back down for a reminder/);
+      await waitFor('the reminder', () => /Just one more thing[\s\S]*Reminder shown \(bubble\)/.test(logText()), 10000);
+      await sleep(400);
+      await ipc.send('dismiss');
+      await waitFor('the window to close', () => (logText().match(/Window closed/g) || []).length > closed, 10000);
+      await ipc.send('up');
+      await logHas(/Brought back[\s\S]*Brought back/);
+    });
+
     await check('start automatically wrote a sign-in entry (under the test folder, never the real one)', async () => {
       await logHas(/Start automatically: on/);
       const where = process.platform === 'darwin' ? path.join(home, 'Library', 'LaunchAgents', 'com.spideyhang.overlay.plist')

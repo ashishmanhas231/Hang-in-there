@@ -36,6 +36,11 @@ const args = process.argv.slice(process.defaultApp ? 2 : 1).filter((a) => !a.sta
 const has = (flag) => args.includes(flag);
 
 app.setName('Spidey Hang');
+if (process.env.SPIDEY_HANG_HOME) {
+  // A test copy (the tests, npm run perf): its own Chromium profile too, so it runs beside the
+  // installed app instead of handing its arguments over to it as a second launch.
+  app.setPath('userData', path.join(process.env.SPIDEY_HANG_HOME, 'electron'));
+}
 
 /** The command a launch with --push/--reset/--exit asks for, or '' for a plain start. */
 function commandFromArgs(list) {
@@ -101,6 +106,12 @@ let layoutTimer = null;
 let lastLayout = null;
 let reminderClock = null;
 const unseenProblems = [];
+/** True while his window is open only to deliver reminders while he is taken down (a visit). */
+let visiting = false;
+/** Reminders due at the same moment while he is down, gathered so one visit delivers them all. */
+let visitItems = [];
+/** Closes his window if the page never says he has climbed out. */
+let leaveTimer = null;
 
 /** What sign-in should run: this app (from source, Electron plus the project folder). */
 function signInCommand() {
@@ -111,7 +122,7 @@ function start() {
   settings = Settings.load();
   log.write(`Start ${app.getVersion()} (Electron ${process.versions.electron}, ${process.platform} ${process.arch}) from ${app.getAppPath()}${has('--at-login') ? ' at sign-in' : ''}. ` +
     `Settings: size ${settings.Size}, rope ${settings.Rope}, hero ${settings.Hero}, change hero every ${settings.RotateMinutes} min, start automatically ${settings.StartAutomatically}, ` +
-    `custom reminders ${settings.CustomReminders.length}`);
+    `custom reminders ${settings.CustomReminders.length}, taken down ${settings.Down}`);
   if (isMac && app.dock) {
     app.dock.hide();
   }
@@ -128,8 +139,12 @@ function start() {
   );
 
   createTray();
-  hangWin = createOverlay('hang');
-  applyLayout();
+  if (settings.Down) {
+    log.write('Taken down: waiting in the tray; he drops in for reminders');
+  } else {
+    hangWin = createOverlay('hang');
+    applyLayout();
+  }
   startRotateTimer();
   reminderClock = new reminders.ReminderClock(() => ({ water: settings.WaterReminder, lunch: settings.LunchReminder, custom: settings.CustomReminders }), remind);
   reminderClock.start();
@@ -137,7 +152,8 @@ function start() {
   for (const event of ['display-metrics-changed', 'display-added', 'display-removed']) {
     screen.on(event, () => {
       clearTimeout(layoutTimer);
-      layoutTimer = setTimeout(applyLayout, 300);
+      // Not in the middle of a visit: he leaves again in a moment anyway.
+      layoutTimer = setTimeout(() => !visiting && applyLayout(), 300);
     });
   }
 }
@@ -296,8 +312,12 @@ function workArea() {
   return screen.getPrimaryDisplay().workArea;
 }
 
-/** Sizes and places the hanging window from the settings, then hangs him straight with a small swing. */
-function applyLayout() {
+/**
+ * Sizes and places the hanging window from the settings, then hangs him straight with a small swing.
+ * extra: { arrive } he drops in from the top; { visit } his window is open only to deliver reminders;
+ * { web } a Big web reminder may come, so the window also reaches the middle of the screen.
+ */
+function applyLayout(extra = {}) {
   if (!hangWin || hangWin.isDestroyed()) {
     return;
   }
@@ -318,12 +338,35 @@ function applyLayout() {
     anchorX = Rig.roomToSwing(anchorX, rope, body, area);
   }
   // Always centred on the anchor, even if that runs past the screen edge.
-  const left = Math.round(anchorX - width / 2);
-  hangWin.setBounds({ x: left, y: area.y, width, height });
-  lastLayout = { left, top: area.y, width, height, work: { x: area.x, y: area.y, width: area.width, height: area.height }, anchorX, rope, body };
+  let left = Math.round(anchorX - width / 2);
+  let right = left + width;
+  let tall = height;
+  let web = null;
+  if (extra.web) {
+    // The webs land in the middle of the screen: the window grows to take them in, only for the visit.
+    const size = Math.round(380 * Math.min(1, (area.height * 0.6) / 380, (area.width * 0.45) / 380));
+    // In the middle of the screen, unless he hangs there: then beside him, on the side with more room.
+    let cx = area.x + area.width / 2;
+    const clear = size / 2 + body * 0.8 + 30;
+    if (Math.abs(anchorX - cx) < clear) {
+      cx = anchorX + (anchorX - area.x < area.x + area.width - anchorX ? clear : -clear);
+      cx = Math.max(area.x + size / 2 + 10, Math.min(area.x + area.width - size / 2 - 10, cx));
+    }
+    cx = Math.round(cx);
+    const cy = Math.round(area.y + area.height * 0.45);
+    left = Math.min(left, cx - size / 2 - 40);
+    right = Math.max(right, cx + size / 2 + 40);
+    tall = Math.max(tall, Math.min(area.height, cy - area.y + size / 2 + 40));
+    web = { x: cx - left, y: cy - area.y, size };
+  }
+  hangWin.setBounds({ x: left, y: area.y, width: right - left, height: tall });
+  lastLayout = { left, top: area.y, width: right - left, height: tall, work: { x: area.x, y: area.y, width: area.width, height: area.height }, anchorX, rope, body };
   log.write(`Layout: screen ${area.x}..${area.x + area.width}, web at ${Math.round(anchorX)} (saved spot ${Math.round(asked)}), ` +
-    `window ${left}..${left + width}, rope ${Math.round(rope)}, swing on his own ${settings.AutoSwing}`);
-  post(hangWin, 'setup', { layout: { ...lastLayout }, flags: flags(), look: buildLook(), shapeMouse: isLinux });
+    `window ${left}..${right}, rope ${Math.round(rope)}, swing on his own ${settings.AutoSwing}${extra.visit ? ', a visit' : ''}${web ? ', big web' : ''}`);
+  post(hangWin, 'setup', {
+    layout: { ...lastLayout }, flags: flags(), look: buildLook(), shapeMouse: isLinux,
+    arrive: Boolean(extra.arrive), visit: Boolean(extra.visit), web,
+  });
 }
 
 const flags = () => ({ breeze: settings.Breeze, autoSwing: settings.AutoSwing });
@@ -365,10 +408,10 @@ function heroLook(info) {
   const poses = {};
   for (const [pose, { file }] of Object.entries(info.poses)) {
     try {
-      // From hero.json: where the web ties on (grip), how far he is turned (tilt), and where reminder
-      // bubbles point (face, with its radius faceSize).
-      const { grip, tilt, face, faceSize } = info.poseSettings[pose] || {};
-      poses[pose] = { bytes: readBytes(file), file: path.basename(file), grip, tilt, face, faceSize };
+      // From hero.json: where the web ties on (grip), how far he is turned (tilt), where reminder
+      // bubbles point (face, with its radius faceSize), and the hand new webs shoot from (hand).
+      const { grip, tilt, face, faceSize, hand } = info.poseSettings[pose] || {};
+      poses[pose] = { bytes: readBytes(file), file: path.basename(file), grip, tilt, face, faceSize, hand };
     } catch (err) {
       raiseProblem(`${info.name}: could not load ${path.basename(file)}. ${err.message}`);
     }
@@ -415,15 +458,139 @@ function startRotateTimer() {
   }
 }
 
-/** Shows a reminder in a speech bubble above his face, or as a system notification if he is not up. */
-function remind({ kind, text }) {
-  log.write(`Reminder (${kind}): ${text}`);
-  if (hangWin && !hangWin.isDestroyed() && hangWin.isVisible()) {
-    post(hangWin, 'remind', { kind, text });
-  } else if (Notification.isSupported()) {
+/**
+ * Shows a reminder. While he is up: in his speech bubble, always. While he is taken down: he drops in
+ * to deliver it, in his bubble or (style 'web') in three webs in the middle of the screen, then
+ * climbs out again (a visit). A system notification only if his window cannot be opened.
+ */
+function remind({ kind, text, style }) {
+  const route = reminders.reminderRoute({ down: settings.Down, style });
+  log.write(`Reminder (${kind}): ${text}${settings.Down ? ` [visit, ${route}]` : ''}`);
+  if (!settings.Down) {
+    if (hangWin && !hangWin.isDestroyed()) {
+      post(hangWin, 'remind', { kind, text, style: 'bubble' });
+    } else {
+      notify(text);
+    }
+    return;
+  }
+  if (visiting && hangWin && !hangWin.isDestroyed()) {
+    // Already here: it waits its turn in the same visit.
+    clearTimeout(leaveTimer);
+    post(hangWin, 'remind', { kind, text, style: route });
+    return;
+  }
+  // Reminders due at the same moment arrive one after another: gather them for one visit.
+  visitItems.push({ kind, text, style: route });
+  if (visitItems.length === 1) {
+    setImmediate(startVisit);
+  }
+}
+
+/** Opens his window and drops him in to deliver the gathered reminders. */
+function startVisit() {
+  const items = visitItems;
+  visitItems = [];
+  if (!settings.Down || items.length === 0) {
+    return;
+  }
+  if (hangWin && !hangWin.isDestroyed()) {
+    // Still climbing out after being taken down: he comes back down for these, in the same window.
+    clearTimeout(leaveTimer);
+    visiting = true;
+    log.write(`Visit: he comes back down for ${items.length === 1 ? 'a reminder' : `${items.length} reminders`}`);
+    for (const item of items) {
+      post(hangWin, 'remind', item);
+    }
+    return;
+  }
+  try {
+    hangWin = createOverlay('hang');
+  } catch (err) {
+    log.write(`Could not open his window for a reminder: ${err.message}`);
+    items.forEach((item) => notify(item.text));
+    return;
+  }
+  visiting = true;
+  const web = items.some((item) => item.style === 'web');
+  log.write(`Visit: he drops in for ${items.length === 1 ? 'a reminder' : `${items.length} reminders`} (${web ? 'web' : 'bubble'})`);
+  applyLayout({ arrive: true, visit: true, web });
+  for (const item of items) {
+    post(hangWin, 'remind', item);
+  }
+}
+
+function notify(text) {
+  if (Notification.isSupported()) {
     new Notification({ title: 'Spidey Hang', body: text }).show();
   }
 }
+
+/** Takes him down: he climbs out of sight and his window closes. The tray and the reminder clock stay. */
+function takeDown() {
+  if (settings.Down) {
+    return;
+  }
+  settings.Down = true;
+  settings.save();
+  log.write('Taken down: he climbs out; the tray and the reminders stay');
+  leave();
+}
+
+/** Asks the page to climb out of sight; it says 'gone' when he has. */
+function leave() {
+  if (!hangWin || hangWin.isDestroyed()) {
+    closeOverlay();
+    return;
+  }
+  post(hangWin, 'leave');
+  clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(closeOverlay, 4000);
+}
+
+/** Closes his window, which frees its page (most of the app's memory). */
+function closeOverlay() {
+  clearTimeout(leaveTimer);
+  leaveTimer = null;
+  visiting = false;
+  if (hangWin && !hangWin.isDestroyed()) {
+    hangWin.destroy();
+    log.write('Window closed: no drawing until the next reminder');
+  }
+  hangWin = null;
+}
+
+/** Brings him back for good: he drops in at his spot, and reminders are bubbles again. */
+function bringBack() {
+  if (!settings.Down) {
+    return;
+  }
+  settings.Down = false;
+  settings.save();
+  log.write('Brought back');
+  clearTimeout(leaveTimer);
+  const here = hangWin && !hangWin.isDestroyed();
+  if (!here) {
+    hangWin = createOverlay('hang');
+  }
+  // In the middle of a visit he is already here: he just stays, in an ordinary window.
+  applyLayout({ arrive: !here });
+  visiting = false;
+}
+
+ipcMain.on('gone', (event) => {
+  // He has climbed out: close his window, unless he was brought back meanwhile.
+  if (windowOf(event) === hangWin && settings.Down) {
+    closeOverlay();
+  }
+});
+
+ipcMain.on('visit-done', (event) => {
+  // The last reminder of a visit has closed: he climbs out again.
+  if (windowOf(event) === hangWin && settings.Down && visiting) {
+    leave();
+  }
+});
 
 function toggleReminder(key) {
   settings[key] = !settings[key];
@@ -531,10 +698,11 @@ ipcMain.handle('reminders:save', (event, data) => {
   return reminderState();
 });
 
-ipcMain.handle('reminders:test', (event, text) => {
-  const clean = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim().slice(0, reminders.MAX_TEXT) : '';
+ipcMain.handle('reminders:test', (event, data) => {
+  const raw = data && typeof data === 'object' ? data.text : data;
+  const clean = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim().slice(0, reminders.MAX_TEXT) : '';
   if (fromRemindersWindow(event) && clean) {
-    remind({ kind: 'test', text: clean });
+    remind({ kind: 'test', text: clean, style: reminders.cleanStyle(data && data.style) });
   }
 });
 
@@ -548,7 +716,62 @@ function setAutoSwing(on) {
 function toggleBreeze() {
   settings.Breeze = !settings.Breeze;
   settings.save();
+  log.write(`Breeze: ${settings.Breeze}`);
   post(hangWin, 'flags', flags());
+}
+
+// ---- Measuring (the "metrics" command, npm run perf) -------------------------------------
+
+let metricsId = 0;
+
+/**
+ * Writes to the log how much CPU (share of one core) and memory every process of the app used over
+ * the next `seconds`, by process type, with the page's own heap and how many frames it drew.
+ */
+async function logMetrics(seconds) {
+  const id = ++metricsId;
+  const page = hangWin && !hangWin.isDestroyed() ? hangWin : null;
+  const before = new Map(app.getAppMetrics().map((m) => [m.pid, m]));
+  const startedAt = Date.now();
+  post(page, 'metrics', { id, phase: 'start' });
+  await new Promise((r) => setTimeout(r, seconds * 1000));
+  const after = app.getAppMetrics();
+  const wall = (Date.now() - startedAt) / 1000;
+  const fromPage = page ? await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), 1000);
+    const listener = (_event, data) => {
+      if (data && data.id === id) {
+        clearTimeout(timer);
+        ipcMain.removeListener('metrics-data', listener);
+        resolve(data);
+      }
+    };
+    ipcMain.on('metrics-data', listener);
+    post(page, 'metrics', { id, phase: 'end' });
+  }) : null;
+
+  const byType = new Map();
+  let cpu = 0;
+  let memory = 0;
+  for (const m of after) {
+    const old = before.get(m.pid);
+    // Cumulative CPU seconds where Electron gives them, otherwise the average since the first sample.
+    const share = old && Number.isFinite(m.cpu.cumulativeCPUUsage) && Number.isFinite(old.cpu.cumulativeCPUUsage)
+      ? ((m.cpu.cumulativeCPUUsage - old.cpu.cumulativeCPUUsage) / wall) * 100
+      : m.cpu.percentCPUUsage;
+    const mb = (m.memory.workingSetSize || 0) / 1024;
+    const t = byType.get(m.type) || { cpu: 0, memory: 0 };
+    t.cpu += share;
+    t.memory += mb;
+    byType.set(m.type, t);
+    cpu += share;
+    memory += mb;
+  }
+  const parts = [...byType].map(([type, t]) => `${type} ${t.cpu.toFixed(1)}% ${Math.round(t.memory)} MB`).join(', ');
+  const pageText = fromPage
+    ? `, page heap ${fromPage.heapMB === null ? '-' : fromPage.heapMB.toFixed(1) + ' MB'}, frames ${fromPage.frames} (${(fromPage.frames / wall).toFixed(1)} per second)`
+    : ', no page';
+  log.write(`Metrics over ${wall.toFixed(1)} s: CPU ${cpu.toFixed(1)}%, memory ${Math.round(memory)} MB, processes ${after.length} (${parts})${pageText}`);
 }
 
 function toggleStartAutomatically() {
@@ -578,12 +801,18 @@ function quit() {
  *   swing on|off|toggle  keep swinging on his own, or not
  *   hero next | hero <name> | rotate <minutes>
  *   snapshot <x.png>     save what the overlay is drawing right now
+ *   capture <x.png>      save his whole window as it looks now, the bubble and the Big web's text too
  *   stats                write frame timing to the log
+ *   metrics [seconds]    write CPU and memory of every process, over that long (10 s), to the log
+ *   breeze on|off|toggle sway in a light breeze, or not
  *   remind water|lunch   show that reminder now
  *   remind <text>        show any text in his speech bubble
+ *   remind-web <text>    the same as a Big web reminder (a big web only while he is taken down)
+ *   dismiss              close the reminder showing now
+ *   down | up            take him down (he waits in the tray) | bring him back
  *   reminders            open the Reminders window
  *   travel               swing across to the other side of the screen
- *   exit                 close
+ *   exit                 quit
  */
 function handleCommand(raw) {
   if (!settings) {
@@ -610,9 +839,36 @@ function handleCommand(raw) {
       }
       break;
     }
+    case 'capture': {
+      const file = rest('capture');
+      if (!file.toLowerCase().endsWith('.png') || !hangWin || hangWin.isDestroyed()) {
+        log.write(`Capture refused: ${file}`);
+      } else {
+        hangWin.webContents.capturePage().then(
+          (image) => {
+            fs.writeFileSync(file, image.toPNG());
+            log.write(`Captured: ${file}`);
+          },
+          (err) => log.write(`Capture failed: ${err.message}`)
+        );
+      }
+      break;
+    }
     case 'stats':
       post(hangWin, 'stats');
       break;
+    case 'metrics': {
+      const seconds = parts.length > 1 ? Number(parts[1]) : 10;
+      logMetrics(Number.isFinite(seconds) ? Math.max(1, Math.min(120, seconds)) : 10);
+      break;
+    }
+    case 'breeze': {
+      const want = parts[1] === 'on' ? true : parts[1] === 'off' ? false : parts[1] === 'toggle' ? !settings.Breeze : null;
+      if (parts.length === 2 && want !== null && want !== settings.Breeze) {
+        toggleBreeze();
+      }
+      break;
+    }
     case 'hero':
       if (parts.length === 2 && parts[1] === 'next') {
         nextHero();
@@ -631,7 +887,9 @@ function handleCommand(raw) {
       break;
     }
     case 'reset':
-      applyLayout();
+      if (!visiting) {
+        applyLayout();
+      }
       break;
     case 'remind': {
       const what = rest('remind');
@@ -642,6 +900,22 @@ function handleCommand(raw) {
       }
       break;
     }
+    case 'remind-web': {
+      const what = rest('remind-web');
+      if (what) {
+        remind({ kind: 'note', text: what, style: 'web' });
+      }
+      break;
+    }
+    case 'dismiss':
+      post(hangWin, 'dismiss');
+      break;
+    case 'down':
+      takeDown();
+      break;
+    case 'up':
+      bringBack();
+      break;
     case 'reminders':
       openReminders();
       break;
@@ -676,8 +950,8 @@ function createTray() {
   }
   tray.setToolTip('Spidey Hang');
   if (isWindows) {
-    // Left-click swings him. Right-click opens the menu.
-    tray.on('click', () => swing());
+    // Left-click swings him (or brings him back). Right-click opens the menu.
+    tray.on('click', () => (settings.Down ? bringBack() : swing()));
     tray.on('right-click', () => tray.popUpContextMenu(buildMenu()));
   } else if (isMac) {
     // On a Mac, clicking a menu bar icon opens its menu. "Give him a swing" is the first item.
@@ -688,7 +962,7 @@ function createTray() {
     // one, so it is handed over again after every change (refreshTrayMenu). Clicks on the icon only
     // open the menu there; "Give him a swing" is its first item.
     tray.setContextMenu(buildMenu());
-    tray.on('click', () => swing());
+    tray.on('click', () => (settings.Down ? bringBack() : swing()));
     const save = settings.save.bind(settings);
     settings.save = () => {
       save();
@@ -742,6 +1016,42 @@ function buildMenu() {
   const heroItems = heroes.scan().filter((hero) => hero.usable).map((hero) =>
     ({ label: hero.name, type: 'checkbox', checked: hero.name.toLowerCase() === current, click: () => setHero(hero.name) }));
 
+  const remindersMenu = {
+    label: 'Reminders',
+    submenu: [
+      { label: 'Drink water every 30 minutes', type: 'checkbox', checked: settings.WaterReminder, click: () => toggleReminder('WaterReminder') },
+      { label: 'Lunch at 3:00 PM', type: 'checkbox', checked: settings.LunchReminder, click: () => toggleReminder('LunchReminder') },
+      ...(settings.CustomReminders.length ? [{ type: 'separator' }] : []),
+      ...settings.CustomReminders.map((r) => ({
+        label: `${menuText(r.text)}  (${reminders.describeCustom(r)})`,
+        type: 'checkbox',
+        checked: r.on,
+        click: () => toggleCustomReminder(r.id),
+      })),
+      { type: 'separator' },
+      { label: 'Add or edit reminders…', click: openReminders },
+      { label: 'Show a test reminder', click: () => remind({ kind: 'water', text: reminders.TEXT.water }) },
+    ],
+  };
+  const startItem = {
+    label: isWindows ? 'Start automatically with Windows' : isMac ? 'Start automatically at login' : 'Start automatically at sign-in',
+    type: 'checkbox',
+    checked: settings.StartAutomatically,
+    click: toggleStartAutomatically,
+  };
+  const quitItem = { label: 'Quit Spidey Hang', click: quit };
+
+  if (settings.Down) {
+    return Menu.buildFromTemplate([
+      { label: 'Bring him back', click: bringBack },
+      { type: 'separator' },
+      remindersMenu,
+      { type: 'separator' },
+      startItem,
+      quitItem,
+    ]);
+  }
+
   const template = [
     { label: 'Give him a swing', click: () => swing() },
     { label: 'Swing across the screen', click: () => post(hangWin, 'travel') },
@@ -767,31 +1077,11 @@ function buildMenu() {
     },
     { label: 'Swing on his own', type: 'checkbox', checked: settings.AutoSwing, click: () => setAutoSwing(!settings.AutoSwing) },
     { label: 'Breeze', type: 'checkbox', checked: settings.Breeze, click: toggleBreeze },
-    {
-      label: 'Reminders',
-      submenu: [
-        { label: 'Drink water every 30 minutes', type: 'checkbox', checked: settings.WaterReminder, click: () => toggleReminder('WaterReminder') },
-        { label: 'Lunch at 3:00 PM', type: 'checkbox', checked: settings.LunchReminder, click: () => toggleReminder('LunchReminder') },
-        ...(settings.CustomReminders.length ? [{ type: 'separator' }] : []),
-        ...settings.CustomReminders.map((r) => ({
-          label: `${menuText(r.text)}  (${reminders.describeCustom(r)})`,
-          type: 'checkbox',
-          checked: r.on,
-          click: () => toggleCustomReminder(r.id),
-        })),
-        { type: 'separator' },
-        { label: 'Add or edit reminders…', click: openReminders },
-        { label: 'Show a test reminder', click: () => remind({ kind: 'water', text: reminders.TEXT.water }) },
-      ],
-    },
+    remindersMenu,
     { type: 'separator' },
-    {
-      label: isWindows ? 'Start automatically with Windows' : isMac ? 'Start automatically at login' : 'Start automatically at sign-in',
-      type: 'checkbox',
-      checked: settings.StartAutomatically,
-      click: toggleStartAutomatically,
-    },
-    { label: 'Take him down (exit)', click: quit },
+    startItem,
+    { label: 'Take him down', click: takeDown },
+    quitItem,
   ];
   return Menu.buildFromTemplate(template);
 }

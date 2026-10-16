@@ -9,7 +9,7 @@
 <body>
   <main>
     <h1>Reminders</h1>
-    <p class="lead">Spidey says these in a speech bubble when they are due.</p>
+    <p class="lead">Spidey says these in his speech bubble when they are due. When you have taken him down, he drops in to deliver each one, in his bubble or in a big web in the middle of the screen.</p>
 
     <section aria-labelledby="yours">
       <h2 id="yours">Your reminders</h2>
@@ -47,6 +47,15 @@
             <button type="button" class="link" data-days="1,2,3,4,5">Weekdays</button>
             <button type="button" class="link" data-days="0,6">Weekends</button>
           </div>
+        </fieldset>
+
+        <fieldset class="field">
+          <legend>Show as</legend>
+          <div class="styles">
+            <label class="style-choice"><input type="radio" name="style" value="bubble" checked> <span><b>Bubble</b><span class="hint">He says it, as always</span></span></label>
+            <label class="style-choice"><input type="radio" name="style" value="web"> <span><b>Big web</b><span class="hint">Three webs, mid-screen</span></span></label>
+          </div>
+          <p class="hint small-print">Used when Spidey is taken down. While he is up, he always uses his bubble.</p>
         </fieldset>
 
         <p id="error" class="error" role="alert" hidden></p>

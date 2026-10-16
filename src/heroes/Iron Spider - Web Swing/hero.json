@@ -1,0 +1,7 @@
+{
+  // Iron Spider, hanging from his raised fist. The web painted in the original picture is erased:
+  // the app draws its own from "grip". "face" is where reminder bubbles point; new webs shoot from
+  // "hand" (his open lower hand).
+  "line": "web",
+  "poses": { "hang": { "tilt": 4, "faceSize": 45, "points": { "grip": [262, 32], "face": [452, 253], "hand": [462, 563] } } }
+}

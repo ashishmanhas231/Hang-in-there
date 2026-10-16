@@ -37,6 +37,10 @@
   // ---- Form -----------------------------------------------------------------------------------
 
   const typeValue = () => document.querySelector('input[name="type"]:checked').value;
+  const styleValue = () => document.querySelector('input[name="style"]:checked').value;
+  const setStyle = (style) => {
+    document.querySelector(`input[name="style"][value="${style === 'web' ? 'web' : 'bubble'}"]`).checked = true;
+  };
 
   function syncType() {
     // Dimmed rather than disabled, so clicking the other row's field still picks that row.
@@ -79,14 +83,14 @@
         $('minutes').focus();
         return null;
       }
-      return { text, type: 'every', minutes, days };
+      return { text, type: 'every', minutes, days, style: styleValue() };
     }
     if (!/^\d{2}:\d{2}$/.test($('time').value)) {
       showError('Pick a time of day.');
       $('time').focus();
       return null;
     }
-    return { text, type: 'daily', time: $('time').value, days };
+    return { text, type: 'daily', time: $('time').value, days, style: styleValue() };
   }
 
   function resetForm() {
@@ -95,6 +99,7 @@
     $('time').value = '09:00';
     $('minutes').value = '60';
     setDays(DAY_ORDER);
+    setStyle('bubble');
     syncType();
     showError('');
     $('form-title').textContent = 'Add a reminder';
@@ -112,6 +117,7 @@
       $('time').value = r.time;
     }
     setDays(r.days);
+    setStyle(r.style);
     showError('');
     $('form-title').textContent = 'Edit reminder';
     $('submit').textContent = 'Save changes';
@@ -148,7 +154,7 @@
       return;
     }
     showError('');
-    api.test(text);
+    api.test({ text, style: styleValue() });
   });
 
   // ---- List -----------------------------------------------------------------------------------
@@ -188,13 +194,13 @@
       text.textContent = r.text;
       const when = document.createElement('div');
       when.className = 'when-text';
-      when.textContent = r.summary + (r.on ? '' : ' · off');
+      when.textContent = r.summary + (r.style === 'web' ? ' · Big web' : '') + (r.on ? '' : ' · off');
       words.append(text, when);
 
       const tools = document.createElement('div');
       tools.className = 'tools';
       tools.append(
-        button('Show', 'small', () => api.test(r.text), `Show "${r.text}" now`),
+        button('Show', 'small', () => api.test({ text: r.text, style: r.style }), `Show "${r.text}" now`),
         button('Edit', 'small', () => startEdit(r), `Edit "${r.text}"`),
         button('Delete', 'small danger', () => remove(r), `Delete "${r.text}"`)
       );

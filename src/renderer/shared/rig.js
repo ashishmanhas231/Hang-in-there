@@ -97,6 +97,8 @@
       this.travelPush = 0;
       /** The rope length he eases back to after the rope was re-tied at another length. 0 = as built. */
       this.ropeTarget = 0;
+      /** How fast the rope eases to ropeTarget, per step. Faster while he drops in or climbs out. */
+      this.ropeEase = ROPE_EASE;
     }
 
     get ropeAngle() {
@@ -188,6 +190,26 @@
       this.lastPeak = 0;
       this.lastDirection = 0;
       this.free = false;
+    }
+
+    /**
+     * Reels the rope in to `length`, everything hanging still and straight below the web, as he is
+     * when he has just climbed up to it. Set ropeTarget after this and he lowers himself down.
+     */
+    reel(length) {
+      const ropeLinks = this.ropeCount - 1;
+      const seg = Math.max(0.5, length) / ropeLinks;
+      const { x, y } = this.anchor;
+      for (let i = 0; i < this.ropeCount; i++) {
+        const p = this.particles[i];
+        p.x = p.px = x;
+        p.y = p.py = y + i * seg;
+      }
+      for (let i = 0; i < ropeLinks; i++) {
+        this.links[i].length = seg;
+      }
+      this.head.x = this.head.px = x;
+      this.head.y = this.head.py = this.ankle.y + this.bodyLength;
     }
 
     /** Lets go of the web. He flies free until reattach(); the rope stays still where it was. */
@@ -313,7 +335,7 @@
       if (Math.abs(now - this.ropeTarget) < 0.05) {
         return;
       }
-      const next = (now + (this.ropeTarget - now) * ROPE_EASE) / ropeLinks;
+      const next = (now + (this.ropeTarget - now) * this.ropeEase) / ropeLinks;
       for (let i = 0; i < ropeLinks; i++) {
         this.links[i].length = next;
       }
@@ -541,7 +563,7 @@
     b.y -= dy * kb;
   }
 
-  const api = { Rig, Particle, STEP, REACH_PAST_HEAD, SWING_TARGET, ANCHOR_Y, GRAVITY };
+  const api = { Rig, Particle, STEP, REACH_PAST_HEAD, SWING_TARGET, ANCHOR_Y, GRAVITY, ROPE_EASE };
   if (typeof module === 'object' && module.exports) {
     module.exports = api;
   } else {

@@ -4,9 +4,12 @@
  * When both fall on the same moment (3:00 PM), only lunch is shown.
  *
  * Custom reminders (settings.CustomReminders), made in the Reminders window:
- *   { id, text, type: 'daily', time: 'HH:MM', days, on }      at that time of day
- *   { id, text, type: 'every', minutes: N, days, on }         every N minutes, counted from midnight
+ *   { id, text, type: 'daily', time: 'HH:MM', days, on, style }      at that time of day
+ *   { id, text, type: 'every', minutes: N, days, on, style }         every N minutes, counted from midnight
  * days lists the weekdays it runs on (0 = Sunday ... 6 = Saturday); all seven means every day.
+ * style is how it shows while he is taken down: 'bubble' (he drops in and says it) or 'web' (he drops
+ * in and shoots three webs to the middle of the screen, the text written in the big one). While he
+ * is up, every reminder is a bubble. Water and lunch are bubbles.
  * Reminders due at the same moment are all shown, one after another.
  *
  * The timer never waits more than a minute before looking at the clock again, so a Mac that slept
@@ -69,15 +72,26 @@ function cleanCustom(raw) {
     days = ALL_DAYS;
   }
   const on = raw.on !== false;
+  const style = cleanStyle(raw.style);
   if (raw.type === 'every') {
     const minutes = Math.round(Number(raw.minutes));
-    return { id, text, type: 'every', minutes: Number.isFinite(minutes) ? Math.max(MIN_EVERY, Math.min(MAX_EVERY, minutes)) : 60, days: [...days], on };
+    return { id, text, type: 'every', minutes: Number.isFinite(minutes) ? Math.max(MIN_EVERY, Math.min(MAX_EVERY, minutes)) : 60, days: [...days], on, style };
   }
   const match = /^(\d{1,2}):(\d{2})$/.exec(typeof raw.time === 'string' ? raw.time.trim() : '');
   const hour = match ? Number(match[1]) : NaN;
   const minute = match ? Number(match[2]) : NaN;
   const time = hour <= 23 && minute <= 59 ? `${String(hour).padStart(2, '0')}:${match[2]}` : '09:00';
-  return { id, text, type: 'daily', time, days: [...days], on };
+  return { id, text, type: 'daily', time, days: [...days], on, style };
+}
+
+/** 'web' or 'bubble' (anything else). */
+function cleanStyle(style) {
+  return style === 'web' ? 'web' : 'bubble';
+}
+
+/** How a reminder shows: a 'web' only when he is taken down and it asks for one, else a 'bubble'. */
+function reminderRoute({ down, style }) {
+  return down && style === 'web' ? 'web' : 'bubble';
 }
 
 /** A list of custom reminders, cleaned, without repeated ids, and no longer than MAX_CUSTOM. */
@@ -145,7 +159,7 @@ function nextReminders(now, options) {
   for (const r of options.custom || []) {
     const at = r.on ? nextCustom(now, r) : null;
     if (at) {
-      candidates.push({ at, item: { kind: 'custom', text: r.text, id: r.id } });
+      candidates.push({ at, item: { kind: 'custom', text: r.text, id: r.id, style: cleanStyle(r.style) } });
     }
   }
   if (candidates.length === 0) {
@@ -231,5 +245,6 @@ class ReminderClock {
 
 module.exports = {
   TEXT, nextHalfHour, nextDaily, nextReminder, nextReminders, nextCustom, cleanCustom, cleanCustomList, describeCustom,
+  cleanStyle, reminderRoute,
   ReminderClock, STALE_MS, MAX_TEXT, MAX_CUSTOM, MIN_EVERY, MAX_EVERY,
 };

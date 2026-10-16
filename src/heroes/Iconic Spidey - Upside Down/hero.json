@@ -1,5 +1,6 @@
 {
-  // Classic upside-down hang, always. "face" is where reminder bubbles point.
+  // Classic upside-down hang, always. "face" is where reminder bubbles point; new webs shoot from
+  // "hand" (his clasped hands, up by his feet).
   "line": "web",
-  "poses": { "hang": { "faceSize": 62, "points": { "face": [255, 662] } } }
+  "poses": { "hang": { "faceSize": 62, "points": { "face": [255, 662], "hand": [322, 85] } } }
 }

@@ -10,11 +10,15 @@
  * hero.json (optional; comments and trailing commas allowed):
  * {
  *   "line": "web" | "none",
- *   "poses": { "hang": { "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185] } } }
+ *   "poses": { "hang": { "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185], "hand": [222, 35] } } }
  * }
  *   grip      where his hand holds the web (the web ties on there and runs across the front of him)
  *   tilt      degrees to turn the picture, clockwise positive
  *   face      where reminder bubbles point, with faceSize its radius
+ *   hand      where every new web shoots from (to the next web, to a reminder); without it, the tie-on point
+ *   file      a picture in another hero's folder to use for this pose ("../Other hero/hang.webp"), so a
+ *             hero can mix poses without copies. It has to stay inside the folder holding the heroes.
+ * Points are pixels of the picture, from its top left corner.
  *
  * The folders never change while the app runs, so they are read once and kept.
  */
@@ -81,8 +85,26 @@ function readFolder(dir) {
       hero.poses[pose] = { file: path.join(dir, fileName) };
     }
   }
+  for (const [pose, { file }] of Object.entries(hero.poseSettings)) {
+    if (file && POSE_NAMES.includes(pose)) {
+      const borrowed = borrowedPicture(dir, file);
+      if (borrowed) {
+        hero.poses[pose] = { file: borrowed };
+      } else {
+        log.write(`${hero.name}: ignored "file": "${file}" for ${pose} (not a picture inside ${path.dirname(dir)})`);
+      }
+    }
+  }
   hero.usable = Object.keys(hero.poses).length > 0;
   return hero;
+}
+
+/** The full path of a hero.json "file", or null unless it is a picture inside the folder holding the heroes. */
+function borrowedPicture(dir, file) {
+  const root = path.resolve(path.dirname(dir));
+  const full = path.resolve(dir, file);
+  const inside = full.startsWith(root + path.sep);
+  return inside && PICTURE_TYPES.includes(path.extname(full).toLowerCase()) && fs.existsSync(full) ? full : null;
 }
 
 /** JSON with // and /* comments and trailing commas. */
@@ -135,7 +157,7 @@ function readSettings(jsonFile, hero) {
   }
 }
 
-/** One pose's settings: { grip, tilt, face, faceSize }, each null when not given. */
+/** One pose's settings: { grip, face, hand, tilt, faceSize, file }, each null when not given. */
 function readPose(json) {
   const point = (value) => (Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === 'number')
     ? { x: value[0], y: value[1] } : null);
@@ -143,8 +165,10 @@ function readPose(json) {
   return {
     grip: point(points.grip),
     face: point(points.face),
+    hand: point(points.hand),
     tilt: typeof json.tilt === 'number' ? json.tilt : null,
     faceSize: typeof json.faceSize === 'number' && json.faceSize > 0 ? json.faceSize : null,
+    file: typeof json.file === 'string' && json.file.trim() ? json.file.trim() : null,
   };
 }
 

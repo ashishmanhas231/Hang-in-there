@@ -33,6 +33,11 @@ const DEFAULTS = {
   LunchReminder: true,
   /** The user's own reminders, made in the Reminders window. See reminders.js for the fields. */
   CustomReminders: [],
+  /**
+   * Taken down: his window is closed and the app waits in the tray with the reminder clock. He drops
+   * in to deliver each reminder, then climbs out again. Kept over a restart.
+   */
+  Down: false,
 };
 
 const BODY_LENGTH = { Small: 110, Medium: 150, Large: 200 };

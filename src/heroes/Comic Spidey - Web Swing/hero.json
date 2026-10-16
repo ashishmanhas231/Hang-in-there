@@ -1,0 +1,7 @@
+{
+  // Classic comic Spider-Man, both fists on his web. The painted web line and the loose strand are
+  // erased (the app draws its own from "grip", his top fist). "face" is where reminder bubbles point;
+  // new webs shoot from "hand" (his lower fist).
+  "line": "web",
+  "poses": { "hang": { "tilt": -12, "faceSize": 40, "points": { "grip": [408, 34], "face": [333, 214], "hand": [381, 119] } } }
+}

@@ -1,0 +1,7 @@
+{
+  // Animated-style Spider-Man, hanging from the fist that holds his web, the other hand out in a
+  // thwip. Cut out of its grey background; the painted web is erased (the app draws its own from
+  // "grip"). "face" is where reminder bubbles point; new webs shoot from "hand" (the thwip hand).
+  "line": "web",
+  "poses": { "hang": { "tilt": -20, "faceSize": 36, "points": { "grip": [366, 22], "face": [182, 145], "hand": [68, 212] } } }
+}

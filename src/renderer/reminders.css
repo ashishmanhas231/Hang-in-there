@@ -72,6 +72,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .day:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .presets { display: flex; gap: 14px; margin-top: 4px; }
 
+.styles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.style-choice { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.style-choice:has(input:checked) { border-color: var(--accent); }
+.style-choice > span { display: grid; }
+.style-choice .hint { font-size: 12.5px; }
+.small-print { margin: 2px 0 0; font-size: 12.5px; }
+
 .error { margin: 0; color: var(--danger); }
 .actions { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }

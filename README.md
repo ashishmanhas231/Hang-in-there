@@ -69,7 +69,7 @@ download (roughly 100 MB on Windows), and that is the floor for any Electron app
 - **Click him** for a nudge, or **brush the cursor across him** to push him.
 - **Drag the little web knot** at the top of the screen to move where he hangs.
 - **Right-click him** for the menu: position, size, rope length, hero, breeze, swing on his own, start
-  automatically and exit. The same menu is on the tray icon (Windows: by the clock; macOS: the menu bar; Ubuntu: the top bar).
+  automatically, take him down and quit. The same menu is on the tray icon (Windows: by the clock; macOS: the menu bar; Ubuntu: the top bar).
 - **Windows:** left-click the tray icon to give him a swing. **macOS:** click the menu bar icon; "Give him
   a swing" is the first item.
 - Starting the app again while he is up gives him a swing instead of opening a second one.
@@ -100,7 +100,24 @@ stop there. The new spot is remembered, so he starts there next time. Double-cli
   instead.
 
 Reminders (**Reminders** in the menu): "Time to drink some water" on every half hour, and "It's your
-lunch time" at 3:00 PM. They appear in a speech bubble just above his face, in every pose.
+lunch time" at 3:00 PM. They appear in a speech bubble just above his face, in every pose. A hero with
+a web hand marked (all the bundled ones) shoots a quick web from that hand as the bubble pops up.
+
+### Taking him down
+
+**Take him down** in his menu: he climbs up his web out of sight and his window closes, which frees
+most of the app's memory. The app keeps running in the tray (menu bar) with only the reminder clock,
+so it uses no CPU. When a reminder is due he drops in on his web, delivers it, and climbs back out:
+
+- **Bubble** (the default): his usual speech bubble above his face.
+- **Big web**: he shoots three webs from his hand into the middle of the screen, a small one, a
+  bigger one over it, then a big one, and the reminder is written in the big one. Click it to close
+  it, or it goes after 12 seconds. If he hangs in the middle of the screen, the webs land beside him.
+
+Each of your own reminders picks one of the two (**Show as** in the Reminders window); water and lunch
+are bubbles. While he is up, every reminder is a bubble. **Bring him back** (or, on Windows, a click on
+the tray icon) drops him in for good. He stays taken down over a restart. **Quit Spidey Hang** closes
+the app completely.
 
 ### Your own reminders
 
@@ -111,6 +128,7 @@ lunch time" at 3:00 PM. They appear in a speech bubble just above his face, in e
   from midnight, so every 30 minutes means on the hour and the half hour, and every 45 minutes means
   12:00, 12:45, 1:30 and so on.
 - **On which days:** any mix of weekdays, with shortcuts for every day, weekdays and weekends.
+- **Show as:** Bubble or Big web, for when he is taken down (see above).
 
 Each one can be switched off without deleting it, edited, deleted (with **Undo**), or shown straight
 away with **Show**. They are also listed in the **Reminders** menu, where a click switches one on or
@@ -141,16 +159,21 @@ Pick one from **Hero** in the menu. **Hero > Change hero every** rotates through
 | **Iconic Spidey - Upside Down** (the default) | The classic upside-down hang |
 | **Iconic Spidey - Web Swing** | Mid-swing, holding the web in his fist |
 | **Iconic Spidey - Both** | Upside down at rest, the swing pose while he moves |
+| **Iron Spider - Web Swing** | The Iron Spider suit, hanging from his raised fist |
+| **Animated Spidey - Web Swing** | Animated style, hanging from one fist, the other hand out in a thwip |
+| **Comic Spidey - Web Swing** | Classic comic style, both fists on his web |
 | **Drawn Spider-Man** | The built-in drawing |
 
-The iconic heroes are folders in `src/heroes/` that ship inside the app on every system. That
-folder is git-ignored, so its pictures are only in builds made from a copy that has them; other
-builds show the drawn Spider-Man.
+The heroes are folders in `src/heroes/` that ship inside the app on every system. Each holds
+`hang.webp` (at rest) and optionally `swing.webp` (while he moves; also used while you drag him or
+swing him up high); PNG, GIF, BMP and JPG work too. A pose change is a quick snap: the old picture
+tucks in toward where he is tied on and the new one springs out, and each pose must hold for 0.2 s
+before it shows, so he does not flicker between them as he slows down. A picture also trails its
+swing a little (at most 6 degrees) and stretches for a moment when the web snaps taut; all of it
+settles, so drawing still stops when he is still. With **Reduce motion** on, poses change at once and
+none of that happens.
 
-Each folder holds `hang.png` (at rest) and optionally `swing.png` (while he moves; also used while
-you drag him or swing him up high). Poses cross-fade, and each must hold for 0.2 s before it shows, so
-he does not flicker between them as he slows down. `hero.json` in the folder can set, per pose, in
-the picture's own pixel coordinates:
+`hero.json` in the folder can set, per pose, in the picture's own pixel coordinates:
 
 - `"grip"`: where his hand holds the web, for a pose held by a fist mid-picture. The web ties on
   there and runs across the front of him, and the picture keeps its pose instead of tipping to balance.
@@ -158,13 +181,24 @@ the picture's own pixel coordinates:
   hangs straight below.
 - `"tilt"`: degrees to turn the picture (clockwise is positive).
 - `"face"` with `"faceSize"` (its radius): reminder bubbles appear just above this spot.
+- `"hand"`: where new webs shoot from: the next web as he swings across the screen, the quick web as
+  a reminder bubble pops up, and the webs of a Big web reminder. Without it, from where he is tied on.
+- `"file"`: a picture in another hero's folder to use for this pose, so a hero can mix poses
+  without copies ("Both" uses the other two Iconic heroes' pictures). It must stay inside `src/heroes`.
 
 ```json
 { "line": "web",
-  "poses": { "hang": { "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185] } } } }
+  "poses": { "hang": { "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185], "hand": [222, 35] } } } }
 ```
 
-The folders are read once at start, and each picture is read from disk once.
+The folders are read once at start, and each picture is read from disk once. Only a screen-sized
+copy of each picture is kept in memory; the full-size decode is freed straight away, and a hero's
+pictures are freed when you change hero.
+
+The bundled pictures were cleaned with `scripts/clean-heroes.js` (run by hand, not shipped): it cuts
+a picture out of a flat background, erases a web painted in the picture (the app draws its own),
+removes the light rim around the cut-out, smooths its jagged edges, sharpens a little and saves WebP.
+The six heroes' pictures take about 316 KB.
 
 ## Where things are kept
 
@@ -178,11 +212,16 @@ redirected to a private copy, and so does anything they start. The profile folde
 ## Scripting
 
 A running Spidey takes one-line text commands: `push [strength]`, `reset`, `swing on|off|toggle`,
-`hero <name>|next`, `rotate <minutes>`, `remind water|lunch|<text>`, `reminders` (opens the Reminders
-window), `travel` (swings across to the other side of the screen), `snapshot <file.png>`, `stats` and
-`exit`. They travel over the named pipe `\\.\pipe\SpideyHang` on
+`breeze on|off|toggle`, `hero <name>|next`, `rotate <minutes>`, `remind water|lunch|<text>`,
+`remind-web <text>` (a Big web reminder; a bubble while he is up), `dismiss` (closes the reminder
+showing), `down` and `up` (take him down, bring him back), `reminders` (opens the Reminders window),
+`travel` (swings across to the other side of the screen), `snapshot <file.png>`,
+`capture <file.png>`, `stats`, `metrics [seconds]` and `exit` (quits). They travel over the named pipe `\\.\pipe\SpideyHang` on
 Windows and the Unix socket `~/.spidey-hang/spidey.sock` on macOS and Linux, which only your own account can open.
-`snapshot` saves only what Spidey himself draws, never the screen behind it.
+`snapshot` saves only what Spidey himself draws, never the screen behind it; `capture` saves his whole
+window as it looks, bubble and Big web text included (still nothing behind it). `metrics` writes to the
+log how much CPU and memory each of the app's processes used over that many seconds (10 by default),
+with how many frames the page drew.
 
 The app's command line takes `--push [n]`, `--reset`, `--exit` and `--reminders` as well.
 
@@ -192,7 +231,7 @@ The app's command line takes `--push [n]`, `--reset`, `--exit` and `--reminders`
 src/
   main.js            Electron main process: windows, tray, menu, settings, sign-in entry
   lib/               plain Node: settings, heroes, reminders, log, command channel, sign-in entries
-  heroes/            the iconic heroes' pictures (git-ignored)
+  heroes/            the heroes' pictures and hero.json files
   renderer/          the overlay page (no Node access; talks to main.js through preload.js)
                      and the Reminders window (reminders.html, through reminders-preload.js)
     shared/          physics and drawing, no Electron in it, so the unit tests run it in plain Node
@@ -215,9 +254,19 @@ top of the screen.
 
 The window is transparent, always on top, and only as big as his swing needs. The page tells the
 main process when the pointer is over something it drew, and the main process then lets the window
-catch the mouse; everywhere else clicks fall through to whatever is underneath. Telling whether the
-pointer is over a picture means reading a pixel back from the canvas, which is slow, so that is only
-done when the pointer is within reach of him.
+catch the mouse; everywhere else clicks fall through to whatever is underneath. The web and the knot
+are tested by their shape. Telling whether the pointer is over a picture means drawing him into a
+one-pixel canvas and reading it back, so that is only done when the pointer is inside the picture's
+box, turned as it is drawn.
+
+Every line drawn (the web, its shadow and shading bands, a web on its way) reuses the same lists of
+points each frame, so drawing allocates nothing while he moves.
+
+While he is taken down there is no overlay window at all, only the tray and one timer in the main
+process. For a reminder the window is opened again: he drops in (the rope starts reeled in and plays
+out), delivers it, climbs out, and the window is closed. For a Big web reminder that window also
+reaches the middle of the screen; the three webs are each drawn once into a bitmap, and a frame only
+scales them as they land (`src/renderer/shared/webshot.js`).
 
 Linux does not tell a window that lets clicks through where the pointer is (and on Wayland an X11 app
 cannot see the pointer over other apps at all), so there the window is shaped instead: each frame the
@@ -232,7 +281,15 @@ npm install          # Electron and electron-builder (development only)
 npm start            # runs the app from the source folder
 npm test             # unit tests: physics, pictures, heroes, settings, sign-in entries, reminders
 npm run test:e2e     # starts the real app, drives it, and runs the offline renders (needs a screen)
+npm run perf         # CPU and memory of the real app, case by case (needs a screen)
 ```
+
+`npm run perf` starts a throwaway copy (its own settings, so it runs beside an installed one) at Large
+size with a Long rope and measures him still, in the breeze, swinging on his own, after a push,
+swinging across, and taken down. `-- --long` adds 90 seconds of breeze to show whether memory keeps
+growing. `SPIDEY_APP=<another checkout> npm run perf` measures that copy instead, so code before and
+after a change can be compared back to back (make one with `git worktree add`). Leave him alone while
+it runs.
 
 On Linux with no screen, run the end-to-end test as `xvfb-run -a npm run test:e2e`.
 
@@ -254,10 +311,10 @@ rope, and rope stretch over time.
 
 ## Artwork
 
-The repository contains no third-party artwork: the drawn Spider-Man is code, and the tray and app
-icons are a plain spider web. The iconic heroes' pictures in `src/heroes/` are stills from the
-Spider-Man films. That folder is git-ignored so they are never pushed, but installers built from a
-copy that has them include them. Keep those builds for your own use.
+The drawn Spider-Man is code, and the tray and app icons are a plain spider web. The heroes' pictures
+in `src/heroes/` are stills and artwork of the Marvel character (from the films, comics and fan
+renders). They are not covered by the MIT licence, and installers built with them are for your own
+use.
 
 ## Disclaimer
 

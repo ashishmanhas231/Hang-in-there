@@ -1,6 +1,8 @@
 /*
  * Draws the hanging hero: the web he hangs from, its ends, and either the drawn figure or a hero's
- * pictures, with pose changes and cross-fades.
+ * pictures. A picture changes pose with a quick snap (the old one tucks in, the new one springs out),
+ * trails its swing a little (follow-through), stretches when the web snaps taut, and shoots new webs
+ * from its hand. All of it settles, so drawing still stops when he is still.
  *
  * The web is drawn in layers: a soft shadow, several thin strokes side by side for rounded shading,
  * then twist marks so it reads as twisted silk.
@@ -24,6 +26,27 @@
   const LINE_STYLES = ['web', 'none'];
   /** The web he let go of fades out over this long (seconds). */
   const LET_GO_SECONDS = 0.4;
+  /** A new web shot from his hand passes to the hand that holds it (the tie-on point) over this long. */
+  const HANDOVER_SECONDS = 0.2;
+  /** Pose snap: the old picture tucks in toward the tie-on point, then the new one springs out. */
+  const SNAP_OUT = 0.09;
+  const SNAP_IN = 0.14;
+  /** Follow-through: a picture trails its swing by this much per radian a second, at most MAX_SWAY. */
+  const FOLLOW = 0.08;
+  const MAX_SWAY = (6 * Math.PI) / 180;
+  const SWAY_SPRING = 120;
+  const SWAY_DAMPING = 2 * Math.sqrt(SWAY_SPRING); // critically damped: follows without overshooting
+  /** Stretch when the web snaps taut: at most 4.5% along his body, gone within STRETCH_SECONDS. */
+  const STRETCH = 0.045;
+  const STRETCH_SECONDS = 0.45;
+  /** A reminder's thwip: its web takes this long from his hand to the bubble, then fades out. */
+  const THWIP_SECONDS = 0.15;
+  const THWIP_FADE = 0.3;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const smooth = (v) => {
+    const k = clamp(v, 0, 1);
+    return k * k * (3 - 2 * k);
+  };
 
   /**
    * A hero's pictures, loaded and sized. Asking for a pose he does not have gives the nearest one:
@@ -34,6 +57,15 @@
       this.name = name;
       this.poses = poses; // pose name -> CustomFigure
       this.line = line === 'none' ? 'none' : 'web';
+    }
+
+    /** Frees the pictures' memory. The look must not be drawn after this. */
+    close() {
+      for (const figure of Object.values(this.poses)) {
+        if (figure && figure.close) {
+          figure.close();
+        }
+      }
     }
 
     pose(name) {
@@ -62,8 +94,24 @@
       this.candidate = null;
       this.candidateTime = 0;
       this.shown = null;
-      this.fadingOut = null;
-      this.fade = 1;
+      /** A pose change on its way: { from (the picture before), age }, or null. */
+      this.snap = null;
+      /** Follow-through: how far the picture trails its swing (radians), and how fast that changes. */
+      this.sway = 0;
+      this.swayV = 0;
+      /** The web just snapped taut: { age, amount }, or null. */
+      this.stretch = null;
+      /** A reminder's thwip, from his hand to the bubble: { to: {x, y}, age }, or null. Set by the page. */
+      this.tether = null;
+      /** No snap, follow-through, stretch or thwip: the page sets this from prefers-reduced-motion. */
+      this.reducedMotion = false;
+      /** How visible all of it is (0..1), for dropping in and climbing out. */
+      this.opacity = 1;
+      /**
+       * Lists of points reused for every frame's lines, by name, so drawing allocates nothing as he
+       * moves (a new list for each rope, shading band and shadow every frame kept memory growing).
+       */
+      this.buffers = new Map();
       this.activity = 0;
       this.dragging = false;
       /** How far between the last two physics steps to draw (0..1), so motion is smooth between steps. */
@@ -74,6 +122,9 @@
       this.letGo = null;
       /** In the air, the new web on its way up (from travel.js): { x, y, share } in window units, or null. */
       this.aim = null;
+      this.hadAim = false;
+      /** Just caught: the web's end moving from his shooting hand to where he holds it, { age }, or null. */
+      this.handover = null;
     }
 
     get look() {
@@ -81,10 +132,12 @@
     }
 
     set look(value) {
+      if (this.lookValue && this.lookValue !== value) {
+        this.lookValue.close(); // its pictures are not needed any more
+      }
       this.lookValue = value;
       this.shown = value ? value.pose(this.poseName) : null;
-      this.fadingOut = null;
-      this.fade = 1;
+      this.snap = null;
       this.candidate = null;
     }
 
@@ -93,13 +146,22 @@
     }
 
     get settled() {
-      return Math.abs(this.armOffset) < 0.002 && this.fade >= 1 && this.candidate === null &&
-        this.letGo === null && this.aim === null;
+      return Math.abs(this.armOffset) < 0.002 && this.snap === null && this.candidate === null &&
+        this.letGo === null && this.aim === null && this.handover === null && this.stretch === null &&
+        Math.abs(this.sway) < 0.0015 && Math.abs(this.swayV) < 0.01 && this.tether === null;
+    }
+
+    /** The web snapped taut (a push, a drag let go, a new web caught): a short stretch, 0..1 strong. */
+    jerk(amount = 1) {
+      if (this.lookValue && !this.reducedMotion) {
+        this.stretch = { age: 0, amount: clamp(amount, 0, 1) };
+      }
     }
 
     /** He has just let go of his web: it stays where it was and fades. Call right after rig.release(). */
     letGoWeb() {
-      this.letGo = { age: 0, line: this.sampleRope() };
+      // Its own copy: the rope's buffer is reused every frame.
+      this.letGo = { age: 0, line: this.sampleRope().map((p) => ({ x: p.x, y: p.y })) };
     }
 
     /** The window moved by -dx: keeps what the stage remembers in window units in place on screen. */
@@ -131,8 +193,10 @@
       this.poseName = 'hang';
       this.candidate = null;
       this.shown = this.lookValue ? this.lookValue.pose(this.poseName) : null;
-      this.fadingOut = null;
-      this.fade = 1;
+      this.snap = null;
+      this.sway = 0;
+      this.swayV = 0;
+      this.stretch = null;
     }
 
     /** Arm lag and pose changes. Call once per drawn frame. */
@@ -147,8 +211,40 @@
         // Loose arms lag behind the swing.
         const target = Math.max(-0.7, Math.min(0.7, (-delta / frameDt) * 0.1));
         this.armOffset += (target - this.armOffset) * 0.12;
+        // A picture's body trails its swing a little, on a spring.
+        const trail = this.lookValue && !this.reducedMotion && !this.rig.free ? clamp((-delta / frameDt) * FOLLOW, -MAX_SWAY, MAX_SWAY) : 0;
+        this.swayV += (SWAY_SPRING * (trail - this.sway) - SWAY_DAMPING * this.swayV) * frameDt;
+        this.sway = clamp(this.sway + this.swayV * frameDt, -MAX_SWAY, MAX_SWAY);
+        if (Math.abs(this.sway) < 1e-4 && Math.abs(this.swayV) < 1e-3 && trail === 0) {
+          this.sway = 0;
+          this.swayV = 0;
+        }
       }
       this.prevTheta = theta;
+      if (this.stretch) {
+        this.stretch.age += frameDt;
+        if (this.stretch.age >= STRETCH_SECONDS) {
+          this.stretch = null;
+        }
+      }
+      if (this.tether) {
+        // With reduced motion there is no thwip at all.
+        this.tether.age = this.reducedMotion ? Infinity : this.tether.age + frameDt;
+        if (this.tether.age >= THWIP_SECONDS + THWIP_FADE) {
+          this.tether = null;
+        }
+      }
+      const aiming = this.aim !== null && this.aim.share > 0;
+      if (this.hadAim && !aiming && !this.rig.free) {
+        this.handover = { age: 0 }; // the new web caught
+      }
+      this.hadAim = aiming;
+      if (this.handover) {
+        this.handover.age += frameDt;
+        if (this.handover.age >= HANDOVER_SECONDS) {
+          this.handover = null;
+        }
+      }
       this.updatePose(frameDt);
       if (this.letGo) {
         this.letGo.age += frameDt;
@@ -193,15 +289,44 @@
           this.candidate = null;
           const next = look.pose(this.poseName);
           if (next !== this.shown) {
-            this.fadingOut = this.shown;
+            this.snap = this.shown && !this.reducedMotion ? { from: this.shown, age: 0 } : null;
             this.shown = next;
-            this.fade = 0;
           }
         }
       }
-      if (this.fade < 1) {
-        this.fade = Math.min(1, this.fade + frameDt / 0.25);
+      if (this.snap) {
+        this.snap.age += frameDt;
+        if (this.snap.age >= SNAP_OUT + SNAP_IN) {
+          this.snap = null;
+        }
       }
+    }
+
+    /**
+     * The picture to draw now and how big (around the tie-on point): during a pose snap, the old one
+     * tucking in, then the new one springing out past full size and back.
+     */
+    pictureNow() {
+      if (!this.snap) {
+        return { picture: this.shown, scale: 1 };
+      }
+      const u = this.snap.age;
+      if (u < SNAP_OUT) {
+        const p = u / SNAP_OUT;
+        return { picture: this.snap.from, scale: 1 - 0.1 * p * p };
+      }
+      const p = (u - SNAP_OUT) / SNAP_IN;
+      const scale = p < 0.55 ? 0.9 + 0.14 * (1 - (1 - p / 0.55) ** 2) : 1.04 - 0.04 * smooth((p - 0.55) / 0.45);
+      return { picture: this.shown, scale };
+    }
+
+    /** Along his body: 1, or a little more for a moment after the web snaps taut. */
+    stretchNow() {
+      if (!this.stretch) {
+        return 1;
+      }
+      const u = this.stretch.age;
+      return 1 + STRETCH * this.stretch.amount * Math.exp(-u / 0.09) * Math.cos((2 * Math.PI * u) / 0.22);
     }
 
     bodyAngle() {
@@ -218,27 +343,51 @@
       if (this.rig.particles.length === 0) {
         return null;
       }
-      const ankle = this.at(this.rig.ankle);
       const local = this.lookValue && this.shown && this.shown.facePoint ? this.shown.facePoint() : null;
       if (local) {
-        // Same turn as draw(): the picture hangs from its top edge, so 180 degrees less than the drawing.
-        const turn = this.bodyAngle() - Math.PI;
-        const c = Math.cos(turn);
-        const s = Math.sin(turn);
-        return { x: ankle.x + local.x * c - local.y * s, y: ankle.y + local.x * s + local.y * c, r: local.r || this.rig.bodyLength * 0.12 };
+        return { ...this.onScreen(local), r: local.r || this.rig.bodyLength * 0.12 };
       }
       const head = this.at(this.rig.head);
       return { x: head.x, y: head.y, r: this.rig.bodyLength * 0.12 };
     }
 
+    /** True if the picture shown has a hand marked (hero.json "hand") for webs to shoot from. */
+    hasHand() {
+      return Boolean(this.lookValue && this.shown && this.shown.handPoint && this.shown.handPoint());
+    }
+
+    /**
+     * The hand new webs shoot from, in window units: the picture's hero.json "hand" when it has one,
+     * otherwise where he is tied on.
+     */
+    handPoint() {
+      const local = this.lookValue && this.shown && this.shown.handPoint ? this.shown.handPoint() : null;
+      return local ? this.onScreen(local) : this.at(this.rig.ankle);
+    }
+
+    /** A point of the shown picture (from the tie-on point, turned as the picture is) in window units. */
+    onScreen(local) {
+      const ankle = this.at(this.rig.ankle);
+      // Same turn as draw(): the picture hangs from its top edge, so 180 degrees less than the drawing.
+      const turn = this.bodyAngle() - Math.PI + this.sway;
+      const c = Math.cos(turn);
+      const s = Math.sin(turn);
+      return { x: ankle.x + local.x * c - local.y * s, y: ankle.y + local.x * s + local.y * c };
+    }
+
     draw(ctx) {
-      if (this.rig.particles.length === 0) {
+      if (this.rig.particles.length === 0 || this.opacity <= 0) {
         return;
       }
+      ctx.save();
+      ctx.globalAlpha *= this.opacity;
       this.drawLetGo(ctx);
       // In the air he has no web: only the new one, if it is on its way up yet.
       const free = this.rig.free;
       const line = free ? this.aimLine() : this.sampleRope();
+      if (line && !free && this.handover) {
+        this.pullEndToHand(line);
+      }
       // A picture held by a fist mid-body ("grip" in hero.json) has the web across the front of him,
       // as in the picture it came from; otherwise his body hides the web.
       const webInFront = Boolean(this.lookValue && this.shown && this.shown.gripped);
@@ -249,25 +398,43 @@
         this.drawTopFitting(ctx);
       }
 
+      this.drawBody(ctx);
+      if (this.lookValue && line) {
+        const ankle = this.at(this.rig.ankle);
+        ctx.save();
+        ctx.translate(ankle.x, ankle.y);
+        this.drawEndFitting(ctx);
+        ctx.restore();
+      }
+      if (line && webInFront) {
+        this.drawLine(ctx, line);
+      }
+      if (this.tether && this.tether.age < THWIP_SECONDS + THWIP_FADE) {
+        const share = Math.min(1, this.tether.age / THWIP_SECONDS);
+        ctx.save();
+        ctx.globalAlpha *= 1 - smooth((this.tether.age - THWIP_SECONDS) / THWIP_FADE);
+        this.drawLine(ctx, straightLine(this.handPoint(), this.tether.to, share, this.buffer('tether', 17)), this.ropeWidth * 0.7);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    /** Just him (his picture, or the drawing), without the web: what the hover test reads pixels of. */
+    drawBody(ctx) {
       const theta = this.bodyAngle();
       const ankle = this.at(this.rig.ankle);
       ctx.save();
       ctx.translate(ankle.x, ankle.y);
       if (this.lookValue) {
         // A picture hangs from its top edge, so it needs 180 degrees less turn than the upright drawing.
-        ctx.save();
-        ctx.rotate(theta - Math.PI);
-        if (this.fadingOut && this.fade < 1) {
-          this.fadingOut.draw(ctx, 1 - this.fade);
-          if (this.shown) {
-            this.shown.draw(ctx, this.fade);
-          }
-        } else if (this.shown) {
-          this.shown.draw(ctx, 1);
+        ctx.rotate(theta - Math.PI + this.sway);
+        const { picture, scale } = this.pictureNow();
+        const along = this.stretchNow();
+        if (scale !== 1 || along !== 1) {
+          ctx.scale(scale, scale * along);
         }
-        ctx.restore();
-        if (line) {
-          this.drawEndFitting(ctx);
+        if (picture) {
+          picture.draw(ctx, 1);
         }
       } else if (this.drawFigure) {
         ctx.rotate(theta);
@@ -276,9 +443,19 @@
         this.drawFigure(ctx, this.armOffset);
       }
       ctx.restore();
-      if (line && webInFront) {
-        this.drawLine(ctx, line);
-      }
+    }
+
+    /** A window point in the shown picture's own units (before its tilt), the inverse of drawBody. */
+    pictureLocal(pt) {
+      const ankle = this.at(this.rig.ankle);
+      const turn = -(this.bodyAngle() - Math.PI + this.sway);
+      const { scale } = this.pictureNow();
+      const dx = pt.x - ankle.x;
+      const dy = pt.y - ankle.y;
+      return {
+        x: (dx * Math.cos(turn) - dy * Math.sin(turn)) / scale,
+        y: (dx * Math.sin(turn) + dy * Math.cos(turn)) / (scale * this.stretchNow()),
+      };
     }
 
     /**
@@ -310,55 +487,91 @@
           return true;
         }
       }
-      // Reading a pixel back from the canvas is slow, so only do it when the pointer is within reach
-      // of the picture (no part of it is further from the tie-on point than its diagonal).
-      const figure = this.shown;
-      const reach = figure && figure.size ? Math.hypot(figure.size.x, figure.size.y) : rig.bodyLength * 1.6;
-      if (Math.hypot(pt.x - rig.ankle.x, pt.y - rig.ankle.y) > reach + 4) {
-        return false;
+      if (this.opacity < 0.05) {
+        return false; // not there yet, or gone
+      }
+      // Reading a pixel back is slow, so only do it when the pointer is inside the picture's box
+      // (turned as it is drawn), or for anything else within reach of where he is tied on.
+      const figure = this.lookValue ? this.pictureNow().picture : null;
+      if (figure && figure.contains) {
+        if (!figure.contains(this.pictureLocal(pt))) {
+          return false;
+        }
+      } else {
+        const reach = figure && figure.size ? Math.hypot(figure.size.x, figure.size.y) : rig.bodyLength * 1.6;
+        if (Math.hypot(pt.x - rig.ankle.x, pt.y - rig.ankle.y) > reach + 4) {
+          return false;
+        }
       }
       return alphaAt ? alphaAt(pt.x, pt.y) > 0 : false;
     }
 
     // ---- The line ------------------------------------------------------------------------
 
+    /**
+     * A list of `n` points to fill and draw this frame, by name. The same list comes back every frame
+     * (and its length is set to n), so nothing is allocated while he moves.
+     */
+    buffer(name, n) {
+      let list = this.buffers.get(name);
+      if (!list) {
+        list = [];
+        this.buffers.set(name, list);
+      }
+      while (list.length < n) {
+        list.push({ x: 0, y: 0 });
+      }
+      list.length = n;
+      return list;
+    }
+
+    /** Points along the rope, smoothed through its particles; a reused list (see buffer). */
     sampleRope() {
       const SAMPLES = 4;
       const particles = this.rig.particles;
       const count = this.rig.ropeCount;
-      const points = [this.at(particles[0])];
-      let from = points[0];
+      const points = this.buffer('rope', 2 + Math.max(0, count - 2) * SAMPLES);
+      const back = 1 - this.blend;
+      const ax = (p) => p.x - back * (p.x - p.px);
+      const ay = (p) => p.y - back * (p.y - p.py);
+      let n = 0;
+      let fromX = ax(particles[0]);
+      let fromY = ay(particles[0]);
+      points[n].x = fromX;
+      points[n++].y = fromY;
       for (let i = 1; i < count - 1; i++) {
-        const control = this.at(particles[i]);
-        const next = this.at(particles[i + 1]);
-        const to = { x: (control.x + next.x) / 2, y: (control.y + next.y) / 2 };
+        const cx = ax(particles[i]);
+        const cy = ay(particles[i]);
+        const toX = (cx + ax(particles[i + 1])) / 2;
+        const toY = (cy + ay(particles[i + 1])) / 2;
         for (let k = 1; k <= SAMPLES; k++) {
           const t = k / SAMPLES;
           const u = 1 - t;
-          points.push({
-            x: u * u * from.x + 2 * u * t * control.x + t * t * to.x,
-            y: u * u * from.y + 2 * u * t * control.y + t * t * to.y,
-          });
+          points[n].x = u * u * fromX + 2 * u * t * cx + t * t * toX;
+          points[n++].y = u * u * fromY + 2 * u * t * cy + t * t * toY;
         }
-        from = to;
+        fromX = toX;
+        fromY = toY;
       }
-      points.push(this.at(this.rig.ankle));
+      points[n].x = ax(this.rig.ankle);
+      points[n++].y = ay(this.rig.ankle);
+      points.length = n;
       return points;
     }
 
-    drawLine(ctx, line) {
+    drawLine(ctx, line, w = this.ropeWidth) {
       if (this.line === 'none') {
         return;
       }
-      const w = this.ropeWidth;
-      const normals = normalsOf(line);
-      strokeLine(ctx, shift(line, 0.9, 1.2), 'rgba(0, 0, 0, 0.157)', w + 3.2);
-      strokeLine(ctx, shift(line, 0.4, 0.6), 'rgba(0, 0, 0, 0.275)', w + 1.4);
+      const normals = normalsOf(line, this.buffer('normals', line.length));
+      const band = this.buffer('band', line.length);
+      strokeLine(ctx, shift(line, 0.9, 1.2, band), 'rgba(0, 0, 0, 0.157)', w + 3.2);
+      strokeLine(ctx, shift(line, 0.4, 0.6, band), 'rgba(0, 0, 0, 0.275)', w + 1.4);
 
       const bands = TONES.length;
       for (let i = 0; i < bands; i++) {
         const across = ((i - (bands - 1) / 2) / bands) * w;
-        strokeLine(ctx, offset(line, normals, across), TONES[i], (w / bands) * 1.6);
+        strokeLine(ctx, offset(line, normals, across, band), TONES[i], (w / bands) * 1.6);
       }
 
       // Twist marks sit on the fixed sample points, so they move with the rope. Do not go back to a
@@ -378,7 +591,7 @@
         ctx.lineTo(line[i].x + n.x * (w * 0.38) + ax * (w * 0.3), line[i].y + n.y * (w * 0.38) + ay * (w * 0.3));
       }
       roundStroke(ctx, TWIST, w * 0.28);
-      strokeLine(ctx, offset(line, normals, -w * 0.28), 'rgba(255, 255, 255, 0.784)', w * 0.18);
+      strokeLine(ctx, offset(line, normals, -w * 0.28, band), 'rgba(255, 255, 255, 0.784)', w * 0.18);
       drawFibres(ctx, line, normals, w);
     }
 
@@ -390,15 +603,33 @@
       if (!aim || aim.share <= 0) {
         return null;
       }
-      const hand = this.at(this.rig.ankle);
-      const tip = { x: hand.x + (aim.x - hand.x) * aim.share, y: hand.y + (aim.y - hand.y) * aim.share };
-      // Points all along it, as on a rope, so it gets the same twist marks and fibres.
-      const points = [];
-      for (let i = 0; i <= 16; i++) {
-        const t = i / 16;
-        points.push({ x: tip.x + (hand.x - tip.x) * t, y: tip.y + (hand.y - tip.y) * t });
+      return straightLine(this.handPoint(), aim, aim.share, this.buffer('aim', 17));
+    }
+
+    /**
+     * Just after a new web catches: its end still starts at the hand that shot it and slides to where
+     * he holds it (the tie-on point), the rest of the line following less the further up it is.
+     */
+    pullEndToHand(line) {
+      const k = Math.min(1, this.handover.age / HANDOVER_SECONDS);
+      const left = 1 - k * k * (3 - 2 * k);
+      const hand = this.handPoint();
+      const end = line[line.length - 1];
+      const dx = (hand.x - end.x) * left;
+      const dy = (hand.y - end.y) * left;
+      for (let i = 1; i < line.length; i++) {
+        const t = i / (line.length - 1);
+        line[i].x += dx * t * t;
+        line[i].y += dy * t * t;
       }
-      return points;
+    }
+
+    /** A web on its way from his hand toward `to`, `share` (0..1) of the way (the Big web reminder). */
+    drawShot(ctx, to, share) {
+      ctx.save();
+      ctx.globalAlpha *= this.opacity;
+      this.drawLine(ctx, straightLine(this.handPoint(), to, share, this.buffer('shot', 17)), this.ropeWidth * 0.8);
+      ctx.restore();
     }
 
     /** The web he just let go of: left where it was, with its splat, fading out over LET_GO_SECONDS. */
@@ -429,6 +660,21 @@
   }
 
   // ---- Small drawing helpers ---------------------------------------------------------------
+
+  /**
+   * A web shot from `from` toward `to`, `share` (0..1) of the way there: points from its tip back to
+   * `from`, as along a rope, so it gets the same twist marks and fibres.
+   */
+  function straightLine(from, to, share, out) {
+    const tipX = from.x + (to.x - from.x) * share;
+    const tipY = from.y + (to.y - from.y) * share;
+    for (let i = 0; i <= 16; i++) {
+      const t = i / 16;
+      out[i].x = tipX + (from.x - tipX) * t;
+      out[i].y = tipY + (from.y - tipY) * t;
+    }
+    return out;
+  }
 
   function roundStroke(ctx, color, width) {
     ctx.lineCap = 'round';
@@ -515,8 +761,7 @@
     ctx.stroke();
   }
 
-  function normalsOf(line) {
-    const normals = [];
+  function normalsOf(line, normals) {
     for (let i = 0; i < line.length; i++) {
       const a = line[Math.max(i - 1, 0)];
       const b = line[Math.min(i + 1, line.length - 1)];
@@ -530,17 +775,26 @@
         dx /= l;
         dy /= l;
       }
-      normals.push({ x: -dy, y: dx });
+      normals[i].x = -dy;
+      normals[i].y = dx;
     }
     return normals;
   }
 
-  function offset(line, normals, distance) {
-    return line.map((p, i) => ({ x: p.x + normals[i].x * distance, y: p.y + normals[i].y * distance }));
+  function offset(line, normals, distance, out) {
+    for (let i = 0; i < line.length; i++) {
+      out[i].x = line[i].x + normals[i].x * distance;
+      out[i].y = line[i].y + normals[i].y * distance;
+    }
+    return out;
   }
 
-  function shift(line, dx, dy) {
-    return line.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+  function shift(line, dx, dy, out) {
+    for (let i = 0; i < line.length; i++) {
+      out[i].x = line[i].x + dx;
+      out[i].y = line[i].y + dy;
+    }
+    return out;
   }
 
   function segmentDistance(p, a, b) {
@@ -554,7 +808,7 @@
   /**
    * Builds the look the main process sent:
    *   { kind: 'drawn' }
-   *   { kind: 'hero', name, line, poses: { pose: { bytes, file, grip, tilt, face, faceSize } } }
+   *   { kind: 'hero', name, line, poses: { pose: { bytes, file, grip, tilt, face, faceSize, hand } } }
    * Resolves a HeroLook, or null for the drawn figure. Anything that fails is reported through
    * problem(message) and falls back to the drawn figure.
    */
@@ -567,7 +821,7 @@
       try {
         loaded[pose] = await IMAGES.CustomFigure.load(picture.bytes, false, bodyLength, pixelsPerDip, 1.3,
           { grip: picture.grip || null, tilt: typeof picture.tilt === 'number' ? picture.tilt : null,
-            face: picture.face || null, faceSize: picture.faceSize || null });
+            face: picture.face || null, faceSize: picture.faceSize || null, hand: picture.hand || null });
       } catch (err) {
         problem(`${look.name}: could not load ${picture.file}. ${err.message}`);
       }
