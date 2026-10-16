@@ -130,9 +130,8 @@
       // He drops in from his web at the top: the rope starts reeled in and plays out.
       rig.reel(12);
       rig.ropeTarget = 0;
-      rig.ropeEase = DROP_EASE;
       stage.opacity = 0;
-      arriving = { age: 0, ready: false };
+      arriving = { age: 0, ready: false, from: 12 };
     } else if (data.arrive) {
       arriving = { age: 0.25, ready: false };
     } else {
@@ -317,9 +316,6 @@
     follow(frameDt);
     updateArrival(frameDt);
     updateLeaving(frameDt);
-    if (!arriving && !leaving && rig.ropeEase !== SH.rig.ROPE_EASE && !rig.reeling) {
-      rig.ropeEase = SH.rig.ROPE_EASE; // dropped all the way in
-    }
     webshot.advance(frameDt);
     stage.aim = travel ? travel.aim(layout.left) : null;
     stage.blend = accumulator / STEP;
@@ -513,6 +509,9 @@
     if (typeof item === 'string') {
       item = { text: item, style: 'bubble' };
     }
+    if (!item) {
+      return; // the queue was cleared meanwhile (he was taken down)
+    }
     if (leaving) {
       // A reminder came as he was climbing out: he comes back down for it.
       comeBack();
@@ -604,10 +603,9 @@
 
   // ---- Dropping in and climbing out (taken down: a visit) --------------------------------------
 
-  /** How fast the rope plays out or reels in as he drops in or climbs out (per physics step). */
-  const DROP_EASE = 0.02;
-  /** Climbing out is quicker: gone in well under a second. */
-  const CLIMB_EASE = 0.05;
+  /** How long dropping in takes, and climbing out. */
+  const DROP_SECONDS = 0.7;
+  const CLIMB_SECONDS = 0.28;
 
   /** Called each frame while he drops in: fades in, lowers himself, then delivers what is waiting. */
   function updateArrival(dt) {
@@ -618,15 +616,17 @@
       stage.opacity = 0; // until his picture has loaded, so the drawing never flashes up
       return;
     }
-    if (!rig.ropeTarget) {
-      rig.ropeTarget = layout.rope;
-    }
     arriving.age += dt;
     stage.opacity = Math.min(1, arriving.age / 0.25);
-    if (rig.ropeLength >= layout.rope * 0.96 || arriving.age > 2.5) {
+    // He lowers himself down his web: fast, then easing to a stop, the rope taut all the way.
+    const p = Math.min(1, arriving.age / DROP_SECONDS);
+    if (arriving.from !== undefined) {
+      rig.reel(arriving.from + (layout.rope - arriving.from) * (1 - (1 - p) ** 3));
+    }
+    if (p >= 1) {
+      rig.ropeTarget = layout.rope;
       arriving = null;
       stage.opacity = 1;
-      // The rope keeps playing out at the drop's pace until it is all out (see frame()).
       stage.jerk(0.6); // the web takes his weight
       log('Dropped in');
       if (waiting.length) {
@@ -642,7 +642,11 @@
     if (leaving || !layout) {
       return;
     }
-    waiting.length = 0;
+    // Reminders still waiting are not lost: the main process brings him back down for them.
+    const still = waiting.splice(0);
+    if (still.length) {
+      api.send('requeue', still);
+    }
     clearTimeout(opening);
     opening = null;
     if (bubble.visible) {
@@ -655,11 +659,7 @@
     arriving = null;
     // Taken down: from now on this window only delivers reminders, then climbs out again.
     visit = true;
-    leaving = { age: 0, fadeAt: stage.reducedMotion ? 0 : null, sent: false };
-    if (!stage.reducedMotion) {
-      rig.ropeTarget = 6;
-      rig.ropeEase = CLIMB_EASE;
-    }
+    leaving = { age: 0, fadeAt: stage.reducedMotion ? 0 : null, sent: false, from: rig.ropeLength };
     wake();
   }
 
@@ -669,7 +669,12 @@
       return;
     }
     leaving.age += dt;
-    if (leaving.fadeAt === null && (rig.ropeLength < layout.rope * 0.4 || leaving.age > 0.45)) {
+    if (!stage.reducedMotion) {
+      // He climbs straight up his web, quick at first.
+      const p = Math.min(1, leaving.age / CLIMB_SECONDS);
+      rig.reel(leaving.from + (6 - leaving.from) * (1 - (1 - p) ** 2));
+    }
+    if (leaving.fadeAt === null && leaving.age > CLIMB_SECONDS * 0.7) {
       leaving.fadeAt = leaving.age;
     }
     if (leaving.fadeAt !== null) {
@@ -686,8 +691,8 @@
   function comeBack() {
     leaving = null;
     stage.opacity = 1;
-    rig.ropeTarget = layout.rope;
-    arriving = { age: 0.25, ready: true };
+    rig.ropeTarget = 0;
+    arriving = { age: 0.25, ready: true, from: rig.ropeLength };
   }
 
   // ---- Frame timing record (the "stats" command) ------------------------------------------
@@ -711,7 +716,7 @@
 
   function logStats() {
     const fps = statTime > 0 ? statFrames / statTime : 0;
-    log(`Frames: ${statFrames} in ${statTime.toFixed(1)} s = ${fps.toFixed(1)} per second, worst gap ${Math.round(statWorst * 1000)} ms, dropped (gap over 25 ms) ${statSlow}, animating ${animating}, look ${stage.look ? stage.look.name : 'drawn'}, pose ${stage.currentPose}, rope ${Math.round(rig.ropeLength)} of ${Math.round(rig.ropeTarget || rig.ropeLength)}, rope angle ${(rig.ropeAngle * 180 / Math.PI).toFixed(1)}, web at ${layout ? Math.round(layout.left + rig.anchor.x) : '-'}`);
+    log(`Frames: ${statFrames} in ${statTime.toFixed(1)} s = ${fps.toFixed(1)} per second, worst gap ${Math.round(statWorst * 1000)} ms, dropped (gap over 25 ms) ${statSlow}, animating ${animating}, look ${stage.look ? stage.look.name : 'drawn'}, pose ${stage.currentPose}, rope ${Math.round(rig.ropeLength)} of ${Math.round(rig.ropeTarget || rig.ropeLength)} (taut ${rig.ropeStretch.toFixed(2)}), rope angle ${(rig.ropeAngle * 180 / Math.PI).toFixed(1)}, web at ${layout ? Math.round(layout.left + rig.anchor.x) : '-'}`);
     statFrames = statTime = statWorst = statSlow = 0;
   }
 

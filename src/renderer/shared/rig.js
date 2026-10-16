@@ -327,7 +327,11 @@
 
     /** True while the rope is still easing toward its usual length (ropeTarget): he is not still yet. */
     get reeling() {
-      return Boolean(this.ropeTarget) && !this.free && Math.abs(this.ropeLength - this.ropeTarget) > 0.5;
+      if (!this.ropeTarget || this.free || this.ropeCount < 2) {
+        return false;
+      }
+      // Still easing to its length, or slack (folded, not yet pulled straight by his weight).
+      return Math.abs(this.ropeLength - this.ropeTarget) > 0.5 || this.ropeStretch < 0.97;
     }
 
     /** Brings a re-tied rope a little nearer its usual length (ropeTarget). */

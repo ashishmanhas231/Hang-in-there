@@ -604,10 +604,26 @@ function bringBack() {
   visiting = false;
 }
 
+/** Reminders that were still waiting when he was taken down: delivered in a visit once he is gone. */
+let requeued = [];
+
+ipcMain.on('requeue', (event, items) => {
+  if (windowOf(event) === hangWin && Array.isArray(items)) {
+    requeued = items.slice(0, 5)
+      .filter((i) => i && typeof i.text === 'string' && i.text.trim())
+      .map((i) => ({ text: i.text.slice(0, reminders.MAX_TEXT), style: reminders.cleanStyle(i.style) }));
+  }
+});
+
 ipcMain.on('gone', (event) => {
   // He has climbed out: close his window, unless he was brought back meanwhile.
   if (windowOf(event) === hangWin && settings.Down) {
     closeOverlay();
+    const items = requeued;
+    requeued = [];
+    for (const item of items) {
+      remind({ kind: 'waiting', text: item.text, style: item.style });
+    }
   }
 });
 
