@@ -317,6 +317,9 @@
     follow(frameDt);
     updateArrival(frameDt);
     updateLeaving(frameDt);
+    if (!arriving && !leaving && rig.ropeEase !== SH.rig.ROPE_EASE && !rig.reeling) {
+      rig.ropeEase = SH.rig.ROPE_EASE; // dropped all the way in
+    }
     webshot.advance(frameDt);
     stage.aim = travel ? travel.aim(layout.left) : null;
     stage.blend = accumulator / STEP;
@@ -327,7 +330,7 @@
 
     // 0.02 units per step is about 5 units a second: too slow to see.
     const still = !flags.breeze && !flags.autoSwing && !dragged && !draggingAnchor && !moving &&
-      !arriving && !leaving && webshot.settled && rig.motion() < 0.02 && stage.settled;
+      !arriving && !leaving && !rig.reeling && webshot.settled && rig.motion() < 0.02 && stage.settled;
     quietTime = still ? quietTime + frameDt : 0;
     if (quietTime > 0.5) {
       rig.freeze();
@@ -623,7 +626,7 @@
     if (rig.ropeLength >= layout.rope * 0.96 || arriving.age > 2.5) {
       arriving = null;
       stage.opacity = 1;
-      rig.ropeEase = SH.rig.ROPE_EASE;
+      // The rope keeps playing out at the drop's pace until it is all out (see frame()).
       stage.jerk(0.6); // the web takes his weight
       log('Dropped in');
       if (waiting.length) {
@@ -708,7 +711,7 @@
 
   function logStats() {
     const fps = statTime > 0 ? statFrames / statTime : 0;
-    log(`Frames: ${statFrames} in ${statTime.toFixed(1)} s = ${fps.toFixed(1)} per second, worst gap ${Math.round(statWorst * 1000)} ms, dropped (gap over 25 ms) ${statSlow}, animating ${animating}, look ${stage.look ? stage.look.name : 'drawn'}, pose ${stage.currentPose}, rope angle ${(rig.ropeAngle * 180 / Math.PI).toFixed(1)}, web at ${layout ? Math.round(layout.left + rig.anchor.x) : '-'}`);
+    log(`Frames: ${statFrames} in ${statTime.toFixed(1)} s = ${fps.toFixed(1)} per second, worst gap ${Math.round(statWorst * 1000)} ms, dropped (gap over 25 ms) ${statSlow}, animating ${animating}, look ${stage.look ? stage.look.name : 'drawn'}, pose ${stage.currentPose}, rope ${Math.round(rig.ropeLength)} of ${Math.round(rig.ropeTarget || rig.ropeLength)}, rope angle ${(rig.ropeAngle * 180 / Math.PI).toFixed(1)}, web at ${layout ? Math.round(layout.left + rig.anchor.x) : '-'}`);
     statFrames = statTime = statWorst = statSlow = 0;
   }
 

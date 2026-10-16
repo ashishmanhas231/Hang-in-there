@@ -325,6 +325,11 @@
       this.contain();
     }
 
+    /** True while the rope is still easing toward its usual length (ropeTarget): he is not still yet. */
+    get reeling() {
+      return Boolean(this.ropeTarget) && !this.free && Math.abs(this.ropeLength - this.ropeTarget) > 0.5;
+    }
+
     /** Brings a re-tied rope a little nearer its usual length (ropeTarget). */
     easeRope() {
       const ropeLinks = this.ropeCount - 1;

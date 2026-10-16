@@ -102,6 +102,21 @@ test('picking: body ends, rope points, the knot, and empty space', () => {
   assert.ok(!rig.nearAnchor({ x: rig.anchor.x + 40, y: 5 }));
 });
 
+test('a reeled-in rope plays all the way out before he counts as still', () => {
+  const rig = mediumRig();
+  const full = rig.ropeLength;
+  rig.reel(12);
+  rig.ropeTarget = full;
+  assert.equal(rig.reeling, true);
+  let t = 0;
+  while (rig.reeling && t < 30) {
+    rig.simulate(t, false, false, null, null);
+    t += STEP;
+  }
+  assert.equal(rig.reeling, false, 'reached its length');
+  assert.ok(Math.abs(rig.ropeLength - full) <= 0.5, `rope ${rig.ropeLength} of ${full}`);
+});
+
 test('moving the knot keeps him where he was', () => {
   const rig = mediumRig();
   const before = rig.head.x;
