@@ -160,6 +160,9 @@
     layout.left = data.left;
     layout.width = data.width;
     layout.height = data.height;
+    // The walls and floor move with the window; left where they were, they pinned his rope and body.
+    rig.width = data.width;
+    rig.height = data.height;
     webSpot = data.web;
     sizeCanvas();
     setVisibleArea();
