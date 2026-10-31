@@ -37,9 +37,13 @@ jobs:
         if: runner.os != 'Linux'
         run: npm run test:e2e
 
+      # Newer Ubuntu runners block the unprivileged user namespaces Chromium's sandbox needs, and
+      # Electron then quits before it opens a window. Allow them for this test run (keeps the sandbox on).
       - name: End-to-end test (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:e2e
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          xvfb-run -a -s "-screen 0 1920x1080x24" npm run test:e2e
 
   package:
     name: Package for ${{ matrix.name }}

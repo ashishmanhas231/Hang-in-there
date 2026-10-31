@@ -24,10 +24,17 @@ delete env.ELECTRON_RUN_AS_NODE;
 process.env.SPIDEY_HANG_HOME = home;
 const ipc = require(path.join(ROOT, 'src/lib/ipc.js'));
 
-// Chromium's sandbox refuses to run as root (CI containers).
-const extra = process.platform === 'linux' && process.getuid && process.getuid() === 0 ? ['--no-sandbox'] : [];
+// Chromium's sandbox refuses to run as root (CI containers). SPIDEY_E2E_FLAGS adds Chromium switches,
+// e.g. --force-prefers-reduced-motion to run the checks the way a CI machine with reduced motion does.
+const extra = [
+  ...(process.platform === 'linux' && process.getuid && process.getuid() === 0 ? ['--no-sandbox'] : []),
+  ...(process.env.SPIDEY_E2E_FLAGS || '').split(/\s+/).filter(Boolean),
+];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const logText = () => (fs.existsSync(path.join(home, 'log.txt')) ? fs.readFileSync(path.join(home, 'log.txt'), 'utf8') : '');
+// What the overlay printed to stderr, shown when a check fails: if it cannot start at all (no display,
+// no usable sandbox), its log stays empty and this is the only place the reason appears.
+let appStderr = '';
 
 let passed = 0;
 async function check(name, fn) {
@@ -36,7 +43,8 @@ async function check(name, fn) {
     passed++;
     console.log(`ok - ${name}`);
   } catch (err) {
-    console.log(`not ok - ${name}\n  ${err.message}\n--- log ---\n${logText()}`);
+    const stderr = appStderr.trim() ? `\n--- overlay stderr ---\n${appStderr.trim().split('\n').slice(-40).join('\n')}` : '';
+    console.log(`not ok - ${name}\n  ${err.message}\n--- log ---\n${logText()}${stderr}`);
     process.exitCode = 1;
     throw err;
   }
@@ -69,7 +77,10 @@ async function main() {
   fs.writeFileSync(path.join(brokenHero, 'hang.png'), 'not a picture');
   const bundled = heroes.scan().map((h) => h.name);
 
-  const app = spawn(electron, [...extra, APP], { env, stdio: 'ignore' });
+  const app = spawn(electron, [...extra, APP], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  app.stderr.on('data', (chunk) => {
+    appStderr = (appStderr + chunk).slice(-20000);
+  });
   let exited = null;
   app.on('exit', (code) => (exited = code));
   try {
@@ -132,7 +143,8 @@ async function main() {
       const saved = () => JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).AnchorFraction;
       const before = saved();
       await ipc.send('travel');
-      await logHas(/Swinging across: web from \d+ to \d+/);
+      // With the system's reduced-motion setting on (as on some CI machines) he glides across instead.
+      await logHas(/(Swinging across|Gliding across \(reduced motion\)): web from \d+ to \d+/);
       await logHas(/Swung across: web now at \d+/);
       await waitFor('the new spot saved', () => Math.abs(saved() - before) > 0.3);
     });
