@@ -421,8 +421,9 @@ test('hero.json: a pose can borrow a picture from another hero folder, never fro
 });
 
 test('the heroes ship with the app, each with its face and hand marked', () => {
+  tempHome(); // no heroes of the user's own
   const heroes = require(path.join(D, 'lib/heroes.js'));
-  const list = heroes.scan();
+  const list = heroes.refresh();
   if (list.length === 0) {
     return; // a checkout without the pictures
   }
@@ -982,4 +983,253 @@ test('swinging across never stalls: every size and rope, still or already swingi
       }
     }
   }
+});
+
+// ---- Reminders you set, the focus timer, reactions, your own heroes ---------------------------
+
+test('reminders: water every N minutes lines up with the clock, lunch at the time you pick', () => {
+  const R = require(path.join(D, 'lib/reminders.js'));
+  const at = (h, m) => new Date(2026, 9, 13, h, m);
+  const hm = (d) => `${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  assert.equal(hm(R.nextWater(at(10, 17), 15)), '13 10:30');
+  assert.equal(hm(R.nextWater(at(10, 17), 45)), '13 10:30');
+  assert.equal(hm(R.nextWater(at(10, 30), 45)), '13 11:15');
+  assert.equal(hm(R.nextWater(at(10, 17), 120)), '13 12:00');
+  assert.equal(hm(R.nextWater(at(23, 50), 45)), '14 0:00', 'the day starts again at midnight');
+  assert.equal(R.cleanWaterMinutes(5), 15);
+  assert.equal(R.cleanWaterMinutes(500), 120);
+  assert.equal(R.cleanWaterMinutes('x'), 30);
+
+  const next = R.nextReminders(at(11, 50), { water: true, waterMinutes: 60, lunch: true, lunchTime: '12:00' });
+  assert.deepEqual(next.items.map((i) => i.kind), ['lunch'], 'lunch wins when they meet');
+  assert.equal(hm(R.nextReminders(at(12, 0), { water: false, lunch: true, lunchTime: '12:30' }).at), '13 12:30');
+  assert.equal(hm(R.nextReminders(at(12, 0), { water: false, lunch: true, lunchTime: 'nonsense' }).at), '13 15:00');
+});
+
+test('reminders: times as people write them, and one-off reminders ("remind in 10 Tea is ready")', (t) => {
+  const R = require(path.join(D, 'lib/reminders.js'));
+  assert.equal(R.parseClock('9:05'), '09:05');
+  assert.equal(R.parseClock('15:00'), '15:00');
+  assert.equal(R.parseClock('3pm'), '15:00');
+  assert.equal(R.parseClock('3:30 PM'), '15:30');
+  assert.equal(R.parseClock('12am'), '00:00');
+  assert.equal(R.parseClock('7'), null);
+  assert.equal(R.parseClock('25:00'), null);
+  const now = new Date(2026, 9, 13, 16, 0);
+  assert.deepEqual(R.parseOnce('in 10 Tea is ready', now), { at: new Date(2026, 9, 13, 16, 10), text: 'Tea is ready' });
+  assert.deepEqual(R.parseOnce('in 5 min stretch', now), { at: new Date(2026, 9, 13, 16, 5), text: 'stretch' });
+  assert.deepEqual(R.parseOnce('at 3pm Call back', now), { at: new Date(2026, 9, 14, 15, 0), text: 'Call back' }, 'past today means tomorrow');
+  assert.equal(R.parseOnce('in 0 nothing', now), null);
+  assert.equal(R.parseOnce('in ten minutes', now), null);
+  assert.equal(R.parseOnce('Tea is ready', now), null);
+
+  // Shown when due, once, and one that came due while asleep is shown as soon as the clock looks.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let clock = now.getTime();
+  const once = [{ id: 'a', at: new Date(clock + 90000), text: 'Tea' }, { id: 'b', at: new Date(clock - 3600000), text: 'Missed' }];
+  const shown = [];
+  const reminderClock = new R.ReminderClock(() => ({ water: false, lunch: false, once }), (item) => {
+    shown.push(item.text);
+    once.splice(once.findIndex((o) => o.id === item.id), 1);
+  }, () => new Date(clock));
+  reminderClock.start();
+  clock += 10;
+  t.mock.timers.tick(10);
+  assert.deepEqual(shown, ['Missed']);
+  clock += 90000;
+  t.mock.timers.tick(60000);
+  t.mock.timers.tick(30000);
+  assert.deepEqual(shown, ['Missed', 'Tea']);
+  assert.equal(reminderClock.next, null, 'nothing left to show');
+  reminderClock.stop();
+});
+
+test('focus timer: focus, short breaks, a long one every 4th, by the wall clock', () => {
+  const { Focus, focusMessage } = require(path.join(D, 'lib/focus.js'));
+  const f = new Focus(() => ({ focus: 25, short: 5, long: 15 }));
+  const min = 60000;
+  assert.equal(f.label(0), '');
+  f.start(0);
+  assert.equal(f.label(0), '25m');
+  assert.equal(f.label(24 * min + 1), '1m');
+  assert.equal(f.label(24.5 * min), '30s');
+  assert.equal(f.nextTick(0), min, 'wakes once a minute');
+  assert.equal(f.nextTick(24.5 * min), 1000, 'once a second in the last minute');
+  assert.equal(f.update(10 * min), null);
+  const seen = [];
+  let t = 0;
+  for (let i = 0; i < 8; i++) {
+    t = f.endsAt;
+    seen.push(f.update(t).next);
+  }
+  assert.deepEqual(seen, ['short', 'focus', 'short', 'focus', 'short', 'focus', 'long', 'focus']);
+  assert.match(focusMessage({ ended: 'focus', next: 'short', minutes: 5 }), /5 minute break/);
+  assert.match(focusMessage({ ended: 'focus', next: 'long', minutes: 15 }), /long break: 15/);
+  assert.match(focusMessage({ ended: 'short', next: 'focus' }), /Back to it/);
+
+  // Asleep for 3 hours: it lands in the right part, with one change reported.
+  const g = new Focus(() => ({ focus: 25, short: 5, long: 15 }));
+  g.start(0);
+  const change = g.update(3 * 60 * min);
+  assert.ok(change && g.endsAt > 3 * 60 * min && g.endsAt - 3 * 60 * min <= 25 * min);
+  const phase = g.phase;
+  const skipped = g.skip(g.endsAt - 1000);
+  assert.equal(skipped.ended, phase);
+  assert.notEqual(g.phase, phase);
+  g.stop();
+  assert.equal(g.running, false);
+  assert.equal(g.skip(0), null);
+  // A custom first length.
+  g.start(0, 50);
+  assert.equal(g.endsAt, 50 * min);
+});
+
+test('reactions: the first greeting of a day goes by the time of day, then "Welcome back!" and friends', () => {
+  const X = require(path.join(D, 'lib/reactions.js'));
+  const morning = new Date(2026, 9, 13, 9, 0);
+  const first = X.greeting(morning, '2026-10-12');
+  assert.deepEqual(first, { text: 'Good morning!', day: '2026-10-13' });
+  assert.equal(X.greeting(new Date(2026, 9, 13, 14, 0), '').text, 'Good afternoon!');
+  assert.equal(X.greeting(new Date(2026, 9, 13, 20, 0), '').text, 'Good evening!');
+  const later = X.greeting(new Date(2026, 9, 13, 15, 0), '2026-10-13', () => 0);
+  assert.equal(later.text, X.WELCOME[0]);
+  assert.ok(X.WELCOME.includes(X.greeting(morning, '2026-10-13', () => 0.999).text));
+});
+
+test('reactions: a battery warning once below 20% and once below 10%, thanks when plugged in', () => {
+  const { BatteryWatch } = require(path.join(D, 'lib/reactions.js'));
+  const b = new BatteryWatch();
+  const say = (level, charging = false) => b.report({ level, charging });
+  assert.equal(say(0.5), null);
+  assert.match(say(0.19), /19%/);
+  assert.equal(say(0.18), null, 'once per drop');
+  assert.equal(say(0.21), null);
+  assert.equal(say(0.2), null, 'not again for wobbling around the line');
+  assert.match(say(0.09), /9%.*Plug me in/);
+  assert.equal(say(0.08), null);
+  assert.equal(say(0.08, true), 'Thanks for the power-up!');
+  assert.equal(say(0.5, true), null);
+  assert.match(say(0.15), /15%/, 'warns again after charging');
+  // A desktop with no battery reports "charging, 100%": never a word.
+  const desk = new BatteryWatch();
+  assert.equal(desk.report({ level: 1, charging: true }), null);
+  assert.equal(desk.report({ level: 'x', charging: false }), null);
+  // Already low when first seen: one warning, for the lower level.
+  assert.match(new BatteryWatch().report({ level: 0.05, charging: false }), /Plug me in/);
+});
+
+test('antics: every kind comes up, never twice in a row, every 3 to 7 minutes', () => {
+  const X = require(path.join(D, 'lib/reactions.js'));
+  let seed = 1;
+  const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const seen = new Set();
+  let last = null;
+  for (let i = 0; i < 200; i++) {
+    const a = X.pickAntic(random, last);
+    assert.notEqual(a, last);
+    seen.add(a);
+    last = a;
+    const delay = X.anticDelay(random);
+    assert.ok(delay >= 3 * 60000 && delay <= 7 * 60000, String(delay));
+  }
+  assert.deepEqual([...seen].sort(), [...X.ANTICS].sort());
+  assert.notEqual(X.pickLine(() => 0, X.LINES[0]), X.LINES[0]);
+});
+
+test('settings: the new choices have defaults, and numbers out of range are pulled back in', () => {
+  tempHome();
+  const { Settings } = require(path.join(D, 'lib/settings.js'));
+  const s = new Settings();
+  assert.equal(s.WaterMinutes, 30);
+  assert.equal(s.LunchTime, '15:00');
+  assert.deepEqual([s.FocusMinutes, s.ShortBreakMinutes, s.LongBreakMinutes], [25, 5, 15]);
+  assert.deepEqual([s.Reactions, s.Antics, s.Sounds, s.Hotkeys, s.HideInFullScreen], [true, true, false, true, true]);
+  assert.equal(s.IdleMinutes, 5);
+  assert.equal(s.Display, '');
+  fs.writeFileSync(path.join(process.env.SPIDEY_HANG_HOME, 'settings.json'),
+    JSON.stringify({ WaterMinutes: 3, LunchTime: '12:30', FocusMinutes: 999, IdleMinutes: 0, Sounds: true, Display: 'pointer' }));
+  const t = Settings.load();
+  assert.deepEqual([t.WaterMinutes, t.LunchTime, t.FocusMinutes, t.IdleMinutes, t.Sounds, t.Display], [15, '12:30', 180, 2, true, 'pointer']);
+  t.LunchTime = '1pm';
+  t.save();
+  assert.equal(Settings.load().LunchTime, '13:00');
+});
+
+test('your own heroes: a folder of yours, "(yours)", one replacing a bundled hero, and adding from a picture', () => {
+  const home = tempHome();
+  const heroes = require(path.join(D, 'lib/heroes.js'));
+  const bundled = heroes.refresh().length;
+  const dir = heroes.ensureUserDir();
+  assert.equal(dir, path.join(home, 'heroes'));
+  assert.ok(fs.readFileSync(path.join(dir, 'README.txt'), 'utf8').includes('hang.png'));
+  const picture = path.join(home, 'Web Head.png');
+  fs.writeFileSync(picture, fixtures.person([200, 30, 30, 255]).png());
+  const added = heroes.addFromPicture(picture);
+  assert.equal(added.name, 'Web Head');
+  assert.equal(added.user, true);
+  assert.ok(added.usable && fs.existsSync(path.join(dir, 'Web Head', 'hang.png')));
+  assert.equal(heroes.addFromPicture(picture).name, 'Web Head 2', 'a taken name gets a number');
+  assert.equal(heroes.scan().length, bundled + 2);
+  assert.throws(() => heroes.addFromPicture(path.join(home, 'notes.txt')), /Not a picture/);
+  if (bundled > 0) {
+    const name = 'Iconic Spidey - Upside Down';
+    fs.mkdirSync(path.join(dir, name));
+    fs.copyFileSync(picture, path.join(dir, name, 'hang.png'));
+    assert.equal(heroes.scan().find((h) => h.name === name).user, undefined, 'kept until reloaded');
+    const mine = heroes.refresh().filter((h) => h.name === name);
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0].user, true);
+    assert.equal(heroes.find(name).folderPath, path.join(dir, name));
+  }
+  assert.equal(heroes.heroNameFor('/a/My:Hero?.png'), 'My Hero');
+  fs.rmSync(dir, { recursive: true });
+  assert.equal(heroes.refresh().length, bundled);
+});
+
+test('web-swinging to a chosen spot: near or far, either way, he lands on it and hangs still', () => {
+  const { Travel } = require(path.join(D, 'renderer/shared/travel.js'));
+  for (const [from, to, ropeShare] of [[0.5, 0.6, 0.27], [0.5, 0.4, 0.15], [0.3, 0.45, 0.42], [0.88, 0.7, 0.27], [0.2, 0.9, 0.27]]) {
+    const screenW = 1470;
+    const rope = ropeShare * 920;
+    const body = 150;
+    const reach = rope + body * 1.32;
+    const width = Math.round(2 * reach + 40);
+    let left = Math.round(screenW * from - width / 2);
+    const rig = new Rig();
+    rig.build(width, Math.round(Math.min(920, reach + 30 + 0.32 * rope)), screenW * from - left, rope, body);
+    run(rig, 2);
+    const targetX = screenW * to;
+    const travel = new Travel(rig, Math.sign(to - from), targetX, rope);
+    travel.begin(left);
+    let t = 0;
+    while (t < 12) {
+      rig.simulate(t, false, false, null, null);
+      t += STEP;
+      travel.step(left);
+      const want = Math.round((travel.done ? left + rig.anchor.x : left + rig.ankle.x) - width / 2);
+      rig.shiftEverything(left - want);
+      left = want;
+    }
+    const label = `${from} to ${to}, rope ${ropeShare}`;
+    assert.ok(travel.done, label);
+    assert.ok(Math.abs(left + rig.anchor.x - targetX) < 0.5, `${label}: ended at ${left + rig.anchor.x}`);
+    assert.ok(rig.motion() < 0.5, `${label}: still moving`);
+  }
+});
+
+test('a bungee drop: the rope plays out longer, comes back, and he goes still again', () => {
+  const rig = mediumRig();
+  run(rig, 4);
+  const base = rig.ropeLength;
+  rig.ropeEase = 0.03;
+  rig.ropeTarget = base + base / 3;
+  run(rig, 0.7);
+  assert.ok(rig.ropeLength > base * 1.3, `dropped to ${rig.ropeLength}`);
+  assert.ok(rig.reeling === false || rig.ropeLength > base * 1.3);
+  rig.ropeEase = 0.012;
+  rig.ropeTarget = base;
+  assert.equal(rig.reeling, true, 'not still while climbing back');
+  run(rig, 6);
+  assert.ok(Math.abs(rig.ropeLength - base) < 1, `back to ${rig.ropeLength}`);
+  assert.equal(rig.reeling, false);
 });

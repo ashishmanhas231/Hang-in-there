@@ -6,7 +6,7 @@
 const fs = require('fs');
 const paths = require('./paths');
 const log = require('./log');
-const { cleanCustomList } = require('./reminders');
+const { cleanCustomList, cleanWaterMinutes, cleanLunchTime } = require('./reminders');
 
 const DRAWN = 'Drawn Spider-Man';
 
@@ -38,6 +38,35 @@ const DEFAULTS = {
    * in to deliver each reminder, then climbs out again. Kept over a restart.
    */
   Down: false,
+  /** Minutes between "drink water" bubbles (15..120), lined up with the clock. */
+  WaterMinutes: 30,
+  /** When the lunch bubble comes, 'HH:MM'. */
+  LunchTime: '15:00',
+  /** The focus timer (Pomodoro): focus, then a short break; every 4th break is a long one. Minutes. */
+  FocusMinutes: 25,
+  ShortBreakMinutes: 5,
+  LongBreakMinutes: 15,
+  /** Dozes when you are away, greets you when you come back, warns about a low battery. */
+  Reactions: true,
+  /** Minutes with no keyboard or mouse before he dozes off (2..30). */
+  IdleMinutes: 5,
+  /** Every few minutes at rest he does a little something on his own. */
+  Antics: true,
+  /** A "thwip" when a web shoots, a whoosh on a hard fling. */
+  Sounds: false,
+  /** Control+Option+Shift (Ctrl+Alt+Shift) with H, S, W, F, anywhere. */
+  Hotkeys: true,
+  /** macOS: not shown over apps in full screen. */
+  HideInFullScreen: true,
+  /** Which screen he hangs on: '' the main one, 'pointer' wherever the pointer is, or a screen's id. */
+  Display: '',
+  /** The day he last greeted you ('YYYY-MM-DD'), so the first greeting of a day is a "Good morning". Set by the app. */
+  LastGreeting: '',
+};
+
+const clampInt = (value, lo, hi, fallback) => {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
 };
 
 const BODY_LENGTH = { Small: 110, Medium: 150, Large: 200 };
@@ -48,6 +77,13 @@ class Settings {
     Object.assign(this, DEFAULTS, values || {});
     // Never share the defaults' list between copies.
     this.CustomReminders = cleanCustomList(this.CustomReminders);
+    // Numbers out of range (a hand-edited file) are pulled back in.
+    this.WaterMinutes = cleanWaterMinutes(this.WaterMinutes);
+    this.LunchTime = cleanLunchTime(this.LunchTime);
+    this.FocusMinutes = clampInt(this.FocusMinutes, 1, 180, DEFAULTS.FocusMinutes);
+    this.ShortBreakMinutes = clampInt(this.ShortBreakMinutes, 1, 60, DEFAULTS.ShortBreakMinutes);
+    this.LongBreakMinutes = clampInt(this.LongBreakMinutes, 1, 120, DEFAULTS.LongBreakMinutes);
+    this.IdleMinutes = clampInt(this.IdleMinutes, 2, 30, DEFAULTS.IdleMinutes);
   }
 
   get bodyLength() {

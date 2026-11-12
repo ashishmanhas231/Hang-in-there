@@ -6,13 +6,14 @@
  *   ... --push [n] | --reset | --exit      send that to the running overlay
  *   ... --at-login                         what sign-in runs: waits a few seconds for the taskbar or Dock
  *   ... --reminders                        open the Reminders window (starting the overlay if needed)
+ *   npm run spidey -- <command>            send any command below (scripts/spidey.js)
  * Development only (not in the installed app), nothing appears on screen:
  *   ... --snapshot f.png [seconds] [kick] [hero folder|-] [-] [swing|-] [edge]
  *   ... --export-figure f.png
  */
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, nativeTheme, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, screen, ipcMain, nativeImage, nativeTheme, Notification, globalShortcut, powerMonitor, dialog, shell } = require('electron');
 
 const paths = require('./lib/paths');
 const log = require('./lib/log');
@@ -20,6 +21,8 @@ const ipc = require('./lib/ipc');
 const heroes = require('./lib/heroes');
 const startup = require('./lib/startup');
 const reminders = require('./lib/reminders');
+const { Focus, focusMessage } = require('./lib/focus');
+const reactions = require('./lib/reactions');
 const linux = require('./lib/linux');
 const { Settings, DRAWN } = require('./lib/settings');
 const { Rig, REACH_PAST_HEAD } = require('./renderer/shared/rig.js');
@@ -112,6 +115,29 @@ let visiting = false;
 let visitItems = [];
 /** Closes his window if the page never says he has climbed out. */
 let leaveTimer = null;
+/** Hidden for a while (Hide him): { until } (until 0 = until brought back), or null. Not kept over a restart. */
+let hidden = null;
+let hiddenTimer = null;
+/** One-off reminders ("remind in 10 Tea is ready"): { id, at, text }. Kept in memory only. */
+let onceReminders = [];
+/** The focus timer, and the timer that wakes for its countdown and its ends. */
+let focus = null;
+let focusTimer = null;
+/** The focus part the Linux tray menu was last built for. */
+let focusMenuPhase = 'idle';
+/** Away from the computer (idle, locked, asleep): he dozes. */
+let dozing = false;
+/** When he dozed off (ms), so only keyboard or mouse use after that wakes him. */
+let dozedAt = 0;
+let idleTimer = null;
+/** The next little thing he does on his own. */
+let anticTimer = null;
+let lastAntic = null;
+let lastLine = null;
+const batteryWatch = new reactions.BatteryWatch();
+/** The screen he hangs on now (its id), and the timer that follows the pointer between screens. */
+let shownDisplay = null;
+let displayTimer = null;
 
 /** What sign-in should run: this app (from source, Electron plus the project folder). */
 function signInCommand() {
@@ -120,6 +146,8 @@ function signInCommand() {
 
 function start() {
   settings = Settings.load();
+  // Before the tray: its menu (built at once on Linux) shows the focus timer.
+  focus = new Focus(() => ({ focus: settings.FocusMinutes, short: settings.ShortBreakMinutes, long: settings.LongBreakMinutes }));
   log.write(`Start ${app.getVersion()} (Electron ${process.versions.electron}, ${process.platform} ${process.arch}) from ${app.getAppPath()}${has('--at-login') ? ' at sign-in' : ''}. ` +
     `Settings: size ${settings.Size}, rope ${settings.Rope}, hero ${settings.Hero}, change hero every ${settings.RotateMinutes} min, start automatically ${settings.StartAutomatically}, ` +
     `custom reminders ${settings.CustomReminders.length}, taken down ${settings.Down}`);
@@ -146,14 +174,29 @@ function start() {
     applyLayout();
   }
   startRotateTimer();
-  reminderClock = new reminders.ReminderClock(() => ({ water: settings.WaterReminder, lunch: settings.LunchReminder, custom: settings.CustomReminders }), remind);
+  reminderClock = new reminders.ReminderClock(() => ({
+    water: settings.WaterReminder, waterMinutes: settings.WaterMinutes,
+    lunch: settings.LunchReminder, lunchTime: settings.LunchTime,
+    custom: settings.CustomReminders, once: onceReminders,
+  }), remind);
   reminderClock.start();
+  applyHotkeys();
+  watchPower();
+  startIdleWatch();
+  scheduleAntic();
+  watchDisplays();
+  app.on('will-quit', () => globalShortcut.unregisterAll());
 
   for (const event of ['display-metrics-changed', 'display-added', 'display-removed']) {
     screen.on(event, () => {
       clearTimeout(layoutTimer);
       // Not in the middle of a visit: he leaves again in a moment anyway.
-      layoutTimer = setTimeout(() => !visiting && applyLayout(), 300);
+      layoutTimer = setTimeout(() => {
+        if (!visiting) {
+          applyLayout();
+        }
+        watchDisplays();
+      }, 300);
     });
   }
 }
@@ -192,7 +235,8 @@ function createOverlay(mode, show = true) {
   });
   if (isMac) {
     win.setAlwaysOnTop(true, 'floating');
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // Over apps in full screen only if asked: macOS then keeps him off their space by itself.
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: !(settings && settings.HideInFullScreen) });
   } else {
     win.setAlwaysOnTop(true, 'screen-saver');
   }
@@ -287,6 +331,23 @@ ipcMain.on('move-window', (_event, data) => {
   }
 });
 
+/**
+ * The page wants `extra` units of room below the usual window for a bungee drop, or none again
+ * (extra 0). Only the bottom edge moves, so nothing shifts on screen.
+ */
+ipcMain.on('room-below', (event, data) => {
+  if (windowOf(event) !== hangWin || !lastLayout || lastLayout.web || !data || !Number.isFinite(data.extra)) {
+    return;
+  }
+  const area = lastLayout.work;
+  const height = Math.round(Math.min(area.height, lastLayout.baseHeight + Math.max(0, Math.min(600, data.extra))));
+  if (height !== lastLayout.height) {
+    lastLayout.height = height;
+    hangWin.setBounds({ x: Math.round(lastLayout.left), y: lastLayout.top, width: lastLayout.width, height });
+  }
+  post(hangWin, 'grow', { left: lastLayout.left, width: lastLayout.width, height, web: null });
+});
+
 ipcMain.on('anchor-dropped', (_event, data) => {
   if (settings && Number.isFinite(data.fraction)) {
     settings.AnchorFraction = Math.max(0, Math.min(1, data.fraction));
@@ -308,8 +369,53 @@ ipcMain.on('snapshot-data', (_event, data) => {
 
 // ---- Layout and looks ------------------------------------------------------------------------
 
+/** The screen he hangs on: the main one, the one named in settings.Display, or the pointer's. */
+function targetDisplay() {
+  if (settings.Display === 'pointer') {
+    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  }
+  if (settings.Display) {
+    const named = screen.getAllDisplays().find((d) => String(d.id) === settings.Display);
+    if (named) {
+      return named;
+    }
+  }
+  return screen.getPrimaryDisplay();
+}
+
+/** The work area of his screen. During a visit or after a layout, the one he is on. */
 function workArea() {
-  return screen.getPrimaryDisplay().workArea;
+  return lastLayout && lastLayout.work && hangWin && !hangWin.isDestroyed() ? lastLayout.work : targetDisplay().workArea;
+}
+
+/**
+ * "Follow the pointer" with more than one screen: every 2.5 s, if the pointer is on another screen,
+ * he drops in there. Nothing runs with one screen or another choice.
+ */
+function watchDisplays() {
+  clearInterval(displayTimer);
+  displayTimer = null;
+  if (settings.Display !== 'pointer' || screen.getAllDisplays().length < 2) {
+    return;
+  }
+  displayTimer = setInterval(() => {
+    if (!hangWin || hangWin.isDestroyed() || visiting || hidden) {
+      return;
+    }
+    const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    if (shownDisplay !== null && d.id !== shownDisplay) {
+      log.write(`Pointer moved to screen ${d.id}: he follows`);
+      applyLayout({ arrive: true });
+    }
+  }, 2500);
+}
+
+function setDisplay(value) {
+  settings.Display = value;
+  settings.save();
+  log.write(`Screen: ${value || 'main'}`);
+  applyLayout({ arrive: true });
+  watchDisplays();
 }
 
 /**
@@ -354,7 +460,9 @@ function applyLayout(extra = {}) {
   if (!hangWin || hangWin.isDestroyed()) {
     return;
   }
-  const area = workArea();
+  const display = targetDisplay();
+  shownDisplay = display.id;
+  const area = display.workArea;
   const body = settings.bodyLength;
   const hang = body * (1 + REACH_PAST_HEAD);
   let rope = Math.max(60, settings.ropeFraction * area.height);
@@ -363,6 +471,8 @@ function applyLayout(extra = {}) {
   // Wide enough for a full sideways swing. Not capped at the screen width: a squeezed window means
   // walls he can hit, and hitting them flung him over the top.
   const width = Math.round(2 * reach + 40);
+  // Just tall enough. A bungee drop (an antic) grows it for those two seconds only (room-below):
+  // a taller window costs more to draw on every frame he moves.
   const height = Math.round(Math.min(area.height, reach + 30));
   let anchorX = area.x + Math.max(0, Math.min(1, settings.AnchorFraction)) * area.width;
   anchorX = Math.max(area.x + 20, Math.min(area.x + area.width - 20, anchorX));
@@ -379,16 +489,16 @@ function applyLayout(extra = {}) {
     ({ left, right, tall, web } = webRoom(area, anchorX, body, left, right, tall));
   }
   hangWin.setBounds({ x: left, y: area.y, width: right - left, height: tall });
-  lastLayout = { left, top: area.y, width: right - left, height: tall, web, work: { x: area.x, y: area.y, width: area.width, height: area.height }, anchorX, rope, body };
+  lastLayout = { left, top: area.y, width: right - left, height: tall, baseHeight: tall, web, work: { x: area.x, y: area.y, width: area.width, height: area.height }, anchorX, rope, body };
   log.write(`Layout: screen ${area.x}..${area.x + area.width}, web at ${Math.round(anchorX)} (saved spot ${Math.round(asked)}), ` +
     `window ${left}..${right}, rope ${Math.round(rope)}, swing on his own ${settings.AutoSwing}${extra.visit ? ', a visit' : ''}${web ? ', big web' : ''}`);
   post(hangWin, 'setup', {
     layout: { ...lastLayout }, flags: flags(), look: buildLook(), shapeMouse: isLinux,
-    arrive: Boolean(extra.arrive), visit: Boolean(extra.visit), web,
+    arrive: Boolean(extra.arrive), visit: Boolean(extra.visit), web, doze: dozing,
   });
 }
 
-const flags = () => ({ breeze: settings.Breeze, autoSwing: settings.AutoSwing });
+const flags = () => ({ breeze: settings.Breeze, autoSwing: settings.AutoSwing, sounds: settings.Sounds });
 
 /** Picture bytes by file. The pictures ship with the app and never change, so each is read once. */
 const pictureCache = new Map();
@@ -455,6 +565,46 @@ function setHero(name) {
   reloadLook();
 }
 
+/** Hero > Add a hero from a picture…: copies the picture into a new folder of yours and switches to it. */
+async function addHeroFromPicture() {
+  if (isMac) {
+    app.focus({ steal: true }); // no Dock icon: the dialog only comes to the front this way
+  }
+  const result = await dialog.showOpenDialog({
+    title: 'Pick a picture of your hero',
+    buttonLabel: 'Add hero',
+    properties: ['openFile'],
+    filters: [{ name: 'Pictures', extensions: heroes.PICTURE_TYPES.map((e) => e.slice(1)) }],
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return;
+  }
+  try {
+    const hero = heroes.addFromPicture(result.filePaths[0]);
+    log.write(`Hero added from a picture: ${hero.name} (${hero.folderPath})`);
+    pictureCache.clear();
+    setHero(hero.name);
+  } catch (err) {
+    raiseProblem(`Could not add that picture as a hero. ${err.message}`);
+  }
+}
+
+function openHeroesFolder() {
+  const dir = heroes.ensureUserDir();
+  shell.openPath(dir).then((error) => error && log.write(`Could not open ${dir}: ${error}`));
+}
+
+/** Hero > Reload heroes: reads the folders again, and the pictures, without a restart. */
+function reloadHeroes() {
+  const list = heroes.refresh();
+  pictureCache.clear();
+  log.write(`Heroes reloaded: ${list.length} (${list.filter((h) => h.user).length} yours)`);
+  reloadLook();
+  if (isLinux) {
+    refreshTrayMenu();
+  }
+}
+
 /** The next hero (alphabetical, then the drawing, wrapping round). */
 function nextHero() {
   const usable = [...heroes.scan().filter((h) => h.usable).map((h) => h.name), DRAWN];
@@ -482,9 +632,17 @@ function startRotateTimer() {
  * to deliver it, in his bubble or (style 'web') in three webs in the middle of the screen, then
  * climbs out again (a visit). A system notification only if his window cannot be opened.
  */
-function remind({ kind, text, style }) {
+function remind({ kind, text, style, id }) {
+  if (kind === 'once') {
+    onceReminders = onceReminders.filter((o) => o.id !== id);
+  }
   const route = reminders.reminderRoute({ down: settings.Down, style });
-  log.write(`Reminder (${kind}): ${text}${settings.Down ? ` [visit, ${route}]` : ''}`);
+  log.write(`Reminder (${kind}): ${text}${settings.Down ? ` [visit, ${route}]` : hidden ? ' [hidden: notification]' : ''}`);
+  if (hidden) {
+    // Hidden: out of sight altogether, so the system shows it.
+    notify(text);
+    return;
+  }
   if (!settings.Down) {
     if (hangWin && !hangWin.isDestroyed()) {
       post(hangWin, 'remind', { kind, text, style: 'bubble' });
@@ -558,7 +716,15 @@ function takeDown() {
   }
   settings.Down = true;
   settings.save();
+  // Taken down replaces hidden: reminders are visits again, not notifications.
+  clearTimeout(hiddenTimer);
+  hiddenTimer = null;
+  const wasHidden = Boolean(hidden);
+  hidden = null;
   log.write('Taken down: he climbs out; the tray and the reminders stay');
+  if (wasHidden) {
+    return; // already out of sight, his window closed
+  }
   leave();
 }
 
@@ -586,8 +752,72 @@ function closeOverlay() {
   hangWin = null;
 }
 
+/**
+ * Hides him for `minutes` (0 = until brought back): he climbs out and his window closes, as when
+ * taken down, but reminders become system notifications until he is back.
+ */
+function hide(minutes = 0) {
+  if (settings.Down) {
+    return;
+  }
+  clearTimeout(hiddenTimer);
+  hiddenTimer = null;
+  const already = Boolean(hidden);
+  hidden = { until: minutes > 0 ? Date.now() + minutes * 60000 : 0 };
+  if (minutes > 0) {
+    hiddenTimer = setTimeout(showAgain, minutes * 60000);
+  }
+  log.write(`Hidden ${minutes > 0 ? `for ${minutes} min` : 'until brought back'}; reminders become notifications`);
+  if (!already) {
+    leave();
+  }
+  refreshTrayIfLinux();
+}
+
+/** Ends Hide him: he drops back in. */
+function showAgain() {
+  if (!hidden) {
+    return;
+  }
+  clearTimeout(hiddenTimer);
+  hiddenTimer = null;
+  hidden = null;
+  log.write('Shown again');
+  if (settings.Down) {
+    return;
+  }
+  clearTimeout(leaveTimer);
+  const here = hangWin && !hangWin.isDestroyed();
+  if (!here) {
+    hangWin = createOverlay('hang');
+  }
+  applyLayout({ arrive: !here });
+  refreshTrayIfLinux();
+}
+
+/** ⌃⌥⇧H: hides him, or brings him back from hiding or from being taken down. */
+function toggleHidden() {
+  if (settings.Down) {
+    bringBack();
+  } else if (hidden) {
+    showAgain();
+  } else {
+    hide(0);
+  }
+}
+
+function refreshTrayIfLinux() {
+  if (isLinux) {
+    refreshTrayMenu();
+  }
+}
+
 /** Brings him back for good: he drops in at his spot, and reminders are bubbles again. */
 function bringBack() {
+  if (hidden) {
+    showAgain();
+    return;
+  }
   if (!settings.Down) {
     return;
   }
@@ -617,7 +847,7 @@ ipcMain.on('requeue', (event, items) => {
 
 ipcMain.on('gone', (event) => {
   // He has climbed out: close his window, unless he was brought back meanwhile.
-  if (windowOf(event) === hangWin && settings.Down) {
+  if (windowOf(event) === hangWin && (settings.Down || hidden)) {
     closeOverlay();
     const items = requeued;
     requeued = [];
@@ -672,6 +902,32 @@ function toggleReminder(key) {
   remindersChanged();
 }
 
+function setWaterMinutes(minutes) {
+  settings.WaterMinutes = reminders.cleanWaterMinutes(minutes);
+  remindersChanged();
+}
+
+function setLunchTime(time) {
+  settings.LunchTime = reminders.cleanLunchTime(time);
+  remindersChanged();
+}
+
+/** "remind in 10 Tea is ready" / "remind at 15:30 Call back": true if it was a one-off reminder. */
+function addOnce(words) {
+  const once = reminders.parseOnce(words, new Date());
+  if (!once) {
+    return false;
+  }
+  if (onceReminders.length >= 20) {
+    log.write('One-off reminder refused: 20 are waiting already');
+    return true;
+  }
+  onceReminders.push({ id: 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), at: once.at, text: once.text });
+  log.write(`One-off reminder at ${once.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}: ${once.text}`);
+  reminderClock.start();
+  return true;
+}
+
 function toggleCustomReminder(id) {
   settings.CustomReminders = settings.CustomReminders.map((r) => (r.id === id ? { ...r, on: !r.on } : r));
   remindersChanged();
@@ -681,7 +937,7 @@ function toggleCustomReminder(id) {
 function remindersChanged() {
   settings.save();
   const on = settings.CustomReminders.filter((r) => r.on).length;
-  log.write(`Reminders: water ${settings.WaterReminder}, lunch ${settings.LunchReminder}, ` +
+  log.write(`Reminders: water ${settings.WaterReminder} every ${settings.WaterMinutes} min, lunch ${settings.LunchReminder} at ${settings.LunchTime}, ` +
     `custom ${settings.CustomReminders.length} (${on} on)`);
   reminderClock.start();
   if (remindersWin && !remindersWin.isDestroyed()) {
@@ -694,6 +950,9 @@ function reminderState() {
   return {
     water: settings.WaterReminder,
     lunch: settings.LunchReminder,
+    waterMinutes: settings.WaterMinutes,
+    lunchTime: settings.LunchTime,
+    waterChoices: reminders.WATER_CHOICES,
     custom: settings.CustomReminders.map((r) => ({ ...r, summary: reminders.describeCustom(r) })),
   };
 }
@@ -765,6 +1024,12 @@ ipcMain.handle('reminders:save', (event, data) => {
   if (typeof data.lunch === 'boolean') {
     settings.LunchReminder = data.lunch;
   }
+  if (data.waterMinutes !== undefined) {
+    settings.WaterMinutes = reminders.cleanWaterMinutes(data.waterMinutes);
+  }
+  if (typeof data.lunchTime === 'string' && reminders.parseClock(data.lunchTime)) {
+    settings.LunchTime = reminders.parseClock(data.lunchTime);
+  }
   if (Array.isArray(data.custom)) {
     // Cleaned like settings.json, which also drops the "summary" the window was given.
     settings.CustomReminders = reminders.cleanCustomList(data.custom);
@@ -793,6 +1058,303 @@ function toggleBreeze() {
   settings.save();
   log.write(`Breeze: ${settings.Breeze}`);
   post(hangWin, 'flags', flags());
+}
+
+/** Turns one of the true/false settings over, saves it, and logs it. */
+function toggleSetting(key, after) {
+  settings[key] = !settings[key];
+  settings.save();
+  log.write(`${key}: ${settings[key]}`);
+  if (after) {
+    after();
+  }
+}
+
+// ---- Web-swinging ------------------------------------------------------------------------
+
+/**
+ * Where a web-swing goes, in screen units on his screen: 'left', 'center', 'right', 'random'
+ * (somewhere at least a quarter of the screen away), 'pointer', or a share of the width (0..1).
+ * null if it cannot be worked out.
+ */
+function webTarget(where) {
+  const area = workArea();
+  const share = (f) => area.x + Math.max(0, Math.min(1, f)) * area.width;
+  if (where === 'left') return share(0.12);
+  if (where === 'center') return share(0.5);
+  if (where === 'right') return share(0.88);
+  if (where === 'pointer') return share((screen.getCursorScreenPoint().x - area.x) / area.width);
+  if (where === 'random') {
+    const now = lastLayout ? (lastLayout.anchorX - area.x) / area.width : settings.AnchorFraction;
+    for (let i = 0; i < 20; i++) {
+      const f = 0.08 + Math.random() * 0.84;
+      if (Math.abs(f - now) > 0.25) return share(f);
+    }
+    return share(now < 0.5 ? 0.85 : 0.15);
+  }
+  const f = Number(where);
+  return where !== '' && Number.isFinite(f) ? share(f) : null;
+}
+
+function webSwing(where) {
+  const targetX = webTarget(where);
+  if (targetX === null || !hangWin || hangWin.isDestroyed() || visiting) {
+    return;
+  }
+  log.write(`Web-swing to ${where} (${Math.round(targetX)})`);
+  post(hangWin, 'web-swing', { targetX });
+}
+
+// ---- Focus timer -------------------------------------------------------------------------
+
+function startFocus(minutes) {
+  focus.start(Date.now(), minutes);
+  log.write(`Focus started: ${focus.describe(Date.now())}`);
+  if (hangWin && !hangWin.isDestroyed() && !visiting && !hidden) {
+    post(hangWin, 'remind', { kind: 'focus', text: "Focus time. I'll keep watch!", style: 'bubble' });
+  }
+  focusChanged();
+}
+
+function stopFocus() {
+  if (!focus.running) {
+    return;
+  }
+  focus.stop();
+  log.write('Focus stopped');
+  focusChanged();
+}
+
+function skipFocus() {
+  const change = focus.skip(Date.now());
+  if (change) {
+    log.write(`Focus skipped to ${change.next}`);
+    announceFocus(change);
+  }
+  focusChanged();
+}
+
+/** A part of the focus timer ended: he says so, and swings big at the end of a focus. */
+function announceFocus(change) {
+  remind({ kind: 'focus', text: focusMessage(change), style: 'bubble' });
+  if (change.ended === 'focus' && !settings.Down && !hidden) {
+    setTimeout(() => swing(1.6), 200);
+  }
+}
+
+/** Shows the countdown and sets the timer for its next change, or clears both when it is off. */
+function focusChanged() {
+  clearTimeout(focusTimer);
+  focusTimer = null;
+  const now = Date.now();
+  const label = focus.label(now);
+  if (tray && !tray.isDestroyed()) {
+    if (isMac) {
+      tray.setTitle(label ? ' ' + label : '');
+    }
+    tray.setToolTip(label ? `Spidey Hang: ${label.startsWith('Break') ? label : 'Focus ' + label}` : 'Spidey Hang');
+  }
+  if (focus.running) {
+    focusTimer = setTimeout(() => {
+      const change = focus.update(Date.now());
+      if (change) {
+        log.write(`Focus: ${change.ended} ended, ${change.next} for ${change.minutes} min`);
+        announceFocus(change);
+      }
+      focusChanged();
+    }, focus.nextTick(now));
+  }
+  // Linux hands the whole menu over again to change it, which closes it if open: only when the part changes.
+  if (focus.phase !== focusMenuPhase) {
+    focusMenuPhase = focus.phase;
+    refreshTrayIfLinux();
+  }
+}
+
+function setFocusLength(key, minutes) {
+  settings[key] = minutes;
+  settings.save();
+  log.write(`${key}: ${minutes}`);
+}
+
+// ---- Reacting to the computer ------------------------------------------------------------
+
+/** Lock, unlock, sleep and wake. Only sets the state; whether he reacts is checked when it changes. */
+function watchPower() {
+  powerMonitor.on('lock-screen', () => doze('screen locked'));
+  powerMonitor.on('unlock-screen', () => wakeUp('screen unlocked'));
+  powerMonitor.on('suspend', () => doze('computer asleep'));
+  powerMonitor.on('resume', () => {
+    // Awake again, but maybe at a lock screen: the next look at the idle time decides.
+    startIdleWatch(1000);
+  });
+}
+
+/**
+ * Looks at how long the keyboard and mouse have been untouched: every 30 s while you are here, every
+ * 2 s while he dozes (so he greets you promptly). A main-process call; nothing is drawn.
+ */
+function startIdleWatch(wait) {
+  clearTimeout(idleTimer);
+  idleTimer = null;
+  if (!settings.Reactions) {
+    return;
+  }
+  idleTimer = setTimeout(checkIdle, wait !== undefined ? wait : dozing ? 3000 : 30000);
+}
+
+function checkIdle() {
+  let state = 'unknown';
+  let idleSeconds = 0;
+  try {
+    state = powerMonitor.getSystemIdleState(settings.IdleMinutes * 60);
+    idleSeconds = powerMonitor.getSystemIdleTime();
+  } catch {
+    // Not available here: no dozing.
+  }
+  // Woken only by the keyboard or mouse used after he dozed off (not by the key press that sent "sleep").
+  const usedSinceDoze = idleSeconds + 1 < (Date.now() - dozedAt) / 1000;
+  if (state === 'locked') {
+    doze('screen locked');
+  } else if (!dozing && state === 'idle') {
+    doze(`no keyboard or mouse for ${settings.IdleMinutes} min`);
+  } else if (dozing && state === 'active' && usedSinceDoze) {
+    wakeUp('you are back');
+  }
+  startIdleWatch();
+}
+
+/** forced: the "sleep" command, which works with reactions off too. */
+function doze(why, forced = false) {
+  if (dozing || (!settings.Reactions && !forced)) {
+    return;
+  }
+  dozing = true;
+  dozedAt = Date.now();
+  log.write(`Dozing (${why})`);
+  post(hangWin, 'mood', { doze: true });
+  startIdleWatch();
+}
+
+function wakeUp(why, forced = false) {
+  if (!dozing) {
+    return;
+  }
+  dozing = false;
+  log.write(`Awake (${why})`);
+  post(hangWin, 'mood', { doze: false });
+  greet(forced);
+  startIdleWatch();
+  scheduleAntic();
+}
+
+/** He stretches and greets you, if he is on screen. forced: the "wake" and "greet" commands. */
+function greet(forced = false) {
+  if ((!settings.Reactions && !forced) || !hangWin || hangWin.isDestroyed() || visiting || hidden || settings.Down) {
+    return;
+  }
+  const { text, day } = reactions.greeting(new Date(), settings.LastGreeting);
+  if (settings.LastGreeting !== day) {
+    settings.LastGreeting = day;
+    settings.save();
+  }
+  log.write(`Greeting: ${text}`);
+  post(hangWin, 'remind', { kind: 'greet', text, style: 'bubble' });
+}
+
+/** From the overlay page: { level 0..1, charging }. A warning when it drops below 20% and 10%. */
+ipcMain.on('battery', (event, data) => {
+  if (windowOf(event) !== hangWin || !data || !settings.Reactions) {
+    return;
+  }
+  const line = batteryWatch.report({ level: Number(data.level), charging: Boolean(data.charging) });
+  if (line) {
+    remind({ kind: 'battery', text: line, style: 'bubble' });
+  }
+});
+
+function setReactions(on) {
+  settings.Reactions = on;
+  settings.save();
+  log.write(`React to the computer: ${on}`);
+  if (!on && dozing) {
+    dozing = false;
+    post(hangWin, 'mood', { doze: false });
+  }
+  startIdleWatch();
+}
+
+// ---- Little things he does on his own ----------------------------------------------------
+
+/** Sets the timer for the next antic, 3 to 7 minutes away (nothing while they are off). */
+function scheduleAntic() {
+  clearTimeout(anticTimer);
+  anticTimer = null;
+  if (settings.Antics) {
+    anticTimer = setTimeout(() => {
+      doAntic(null, false);
+      scheduleAntic();
+    }, reactions.anticDelay());
+  }
+}
+
+/**
+ * Asks the page for one antic. Not while he dozes, is hidden or taken down, or during a focus
+ * (forced: the "antic" command and "Do something now" ignore all but his window being there).
+ */
+function doAntic(kind, forced) {
+  if (!hangWin || hangWin.isDestroyed() || visiting || hidden || settings.Down) {
+    return;
+  }
+  if (!forced && (dozing || (focus && focus.phase === 'focus'))) {
+    return;
+  }
+  const what = reactions.ANTICS.includes(kind) ? kind : reactions.pickAntic(Math.random, lastAntic);
+  lastAntic = what;
+  const data = { kind: what };
+  if (what === 'say') {
+    data.text = lastLine = reactions.pickLine(Math.random, lastLine);
+  }
+  log.write(`Antic: ${what}`);
+  post(hangWin, 'antic', data);
+}
+
+// ---- Keyboard shortcuts ------------------------------------------------------------------
+
+/** Control+Option+Shift (Ctrl+Alt+Shift) and a letter, anywhere. One another app has is skipped. */
+const HOTKEYS = {
+  H: () => toggleHidden(),
+  S: () => swing(),
+  W: () => webSwing('pointer'),
+  F: () => (focus.running ? stopFocus() : startFocus()),
+};
+
+function applyHotkeys() {
+  globalShortcut.unregisterAll();
+  if (!settings.Hotkeys) {
+    return;
+  }
+  for (const [key, fn] of Object.entries(HOTKEYS)) {
+    const accelerator = `Control+Alt+Shift+${key}`;
+    let ok = false;
+    try {
+      ok = globalShortcut.register(accelerator, fn);
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      log.write(`Keyboard shortcut ${accelerator} is taken by another app; skipped`);
+    }
+  }
+}
+
+function setHideInFullScreen(on) {
+  settings.HideInFullScreen = on;
+  settings.save();
+  log.write(`Hide over full-screen apps: ${on}`);
+  if (isMac && hangWin && !hangWin.isDestroyed()) {
+    hangWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: !on });
+  }
 }
 
 // ---- Measuring (the "metrics" command, npm run perf) -------------------------------------
@@ -857,6 +1419,11 @@ function toggleStartAutomatically() {
 
 function quit() {
   log.write('Exit');
+  globalShortcut.unregisterAll();
+  for (const t of [focusTimer, idleTimer, anticTimer, hiddenTimer]) {
+    clearTimeout(t);
+  }
+  clearInterval(displayTimer);
   if (reminderClock) {
     reminderClock.stop();
   }
@@ -886,7 +1453,13 @@ function quit() {
  *   dismiss              close the reminder showing now
  *   down | up            take him down (he waits in the tray) | bring him back
  *   reminders            open the Reminders window
+ *   remind in <min> <text> | remind at <time> <text>   a one-off reminder (kept in memory only)
  *   travel               swing across to the other side of the screen
+ *   web left|center|right|random|pointer|<0..1>        web-swing there
+ *   focus start [min] | stop | skip | status           the focus timer
+ *   hide [min] | show    hide him (for that many minutes), or show him again
+ *   antic [wiggle|bungee|swing|say|web]               do a little something now
+ *   sleep | wake | greet doze off, wake up (with a greeting), or just greet
  *   exit                 quit
  */
 function handleCommand(raw) {
@@ -970,6 +1543,11 @@ function handleCommand(raw) {
       const what = rest('remind');
       if (Object.hasOwn(reminders.TEXT, what)) {
         remind({ kind: what, text: reminders.TEXT[what] });
+      } else if (/^(in|at)\s+\d/i.test(what)) {
+        // A one-off reminder, for later; one whose time cannot be read is not shown now by mistake.
+        if (!addOnce(what)) {
+          log.write(`One-off reminder refused, time not understood: ${what}`);
+        }
       } else if (what) {
         remind({ kind: 'note', text: what });
       }
@@ -996,6 +1574,45 @@ function handleCommand(raw) {
       break;
     case 'travel':
       post(hangWin, 'travel');
+      break;
+    case 'web':
+      if (parts.length === 2) {
+        webSwing(parts[1]);
+      }
+      break;
+    case 'focus': {
+      const sub = parts[1] || 'status';
+      if (sub === 'start') {
+        const minutes = Number(parts[2]);
+        startFocus(Number.isFinite(minutes) && minutes > 0 ? minutes : undefined);
+      } else if (sub === 'stop') {
+        stopFocus();
+      } else if (sub === 'skip') {
+        skipFocus();
+      } else if (sub === 'status') {
+        log.write(`Focus status: ${focus.describe(Date.now())}`);
+      }
+      break;
+    }
+    case 'hide': {
+      const minutes = Number(parts[1] || 0);
+      hide(Number.isFinite(minutes) && minutes > 0 ? Math.min(24 * 60, minutes) : 0);
+      break;
+    }
+    case 'show':
+      showAgain();
+      break;
+    case 'antic':
+      doAntic(parts[1] || null, true);
+      break;
+    case 'sleep':
+      doze('the sleep command', true);
+      break;
+    case 'wake':
+      wakeUp('the wake command', true);
+      break;
+    case 'greet':
+      greet(true);
       break;
     case 'exit':
       quit();
@@ -1026,7 +1643,7 @@ function createTray() {
   tray.setToolTip('Spidey Hang');
   if (isWindows) {
     // Left-click swings him (or brings him back). Right-click opens the menu.
-    tray.on('click', () => (settings.Down ? bringBack() : swing()));
+    tray.on('click', () => (settings.Down || hidden ? bringBack() : swing()));
     tray.on('right-click', () => tray.popUpContextMenu(buildMenu()));
   } else if (isMac) {
     // On a Mac, clicking a menu bar icon opens its menu. "Give him a swing" is the first item.
@@ -1037,7 +1654,7 @@ function createTray() {
     // one, so it is handed over again after every change (refreshTrayMenu). Clicks on the icon only
     // open the menu there; "Give him a swing" is its first item.
     tray.setContextMenu(buildMenu());
-    tray.on('click', () => (settings.Down ? bringBack() : swing()));
+    tray.on('click', () => (settings.Down || hidden ? bringBack() : swing()));
     const save = settings.save.bind(settings);
     settings.save = () => {
       save();
@@ -1080,6 +1697,51 @@ function radio(label, checked, click) {
   return { label, type: 'radio', checked, click };
 }
 
+/** "3:00 PM" from 'HH:MM'. */
+const clockLabel = (time) => reminders.clockTime(time);
+
+/** Lunch times offered in the menu, with the current one added if it is not among them. */
+function lunchChoices() {
+  const list = ['11:30', '12:00', '12:30', '13:00', '13:30', '14:00', '15:00'];
+  return list.includes(settings.LunchTime) ? list : [...list, settings.LunchTime].sort();
+}
+
+/** The screens as menu items: the main one, each other one, and following the pointer. */
+function screenMenu() {
+  const primary = screen.getPrimaryDisplay();
+  const others = screen.getAllDisplays().filter((d) => d.id !== primary.id);
+  const named = settings.Display && settings.Display !== 'pointer' && others.some((d) => String(d.id) === settings.Display);
+  return {
+    label: 'Screen',
+    submenu: [
+      radio('Main screen', !settings.Display || (!named && settings.Display !== 'pointer'), () => setDisplay('')),
+      ...others.map((d, i) => radio(`${d.label || `Screen ${i + 2}`} (${d.size.width}×${d.size.height})`, settings.Display === String(d.id), () => setDisplay(String(d.id)))),
+      { type: 'separator' },
+      radio('Follow the pointer', settings.Display === 'pointer', () => setDisplay('pointer')),
+    ],
+  };
+}
+
+function focusMenu() {
+  const now = Date.now();
+  const lengths = (key, values) => values.map((m) => radio(`${m} minutes`, settings[key] === m, () => setFocusLength(key, m)));
+  const add = (key, values) => (values.includes(settings[key]) ? values : [...values, settings[key]].sort((a, b) => a - b));
+  return {
+    label: focus.running ? `Focus timer (${focus.label(now)})` : 'Focus timer',
+    submenu: [
+      ...(focus.running ? [{ label: focus.describe(now), enabled: false }] : []),
+      focus.running
+        ? { label: 'Stop', accelerator: 'Control+Alt+Shift+F', registerAccelerator: false, click: stopFocus }
+        : { label: `Start a ${settings.FocusMinutes} minute focus`, accelerator: 'Control+Alt+Shift+F', registerAccelerator: false, click: () => startFocus() },
+      ...(focus.running ? [{ label: focus.phase === 'focus' ? 'Skip to the break' : 'Skip to the next focus', click: skipFocus }] : []),
+      { type: 'separator' },
+      { label: 'Focus length', submenu: lengths('FocusMinutes', add('FocusMinutes', [15, 25, 30, 45, 50, 60])) },
+      { label: 'Short break', submenu: lengths('ShortBreakMinutes', add('ShortBreakMinutes', [3, 5, 10])) },
+      { label: 'Long break (every 4th)', submenu: lengths('LongBreakMinutes', add('LongBreakMinutes', [10, 15, 20, 30])) },
+    ],
+  };
+}
+
 /** Built fresh each time it opens, so the current choices always show. */
 function buildMenu() {
   const relayout = (apply) => () => {
@@ -1089,13 +1751,16 @@ function buildMenu() {
   };
   const current = settings.Hero.toLowerCase();
   const heroItems = heroes.scan().filter((hero) => hero.usable).map((hero) =>
-    ({ label: hero.name, type: 'checkbox', checked: hero.name.toLowerCase() === current, click: () => setHero(hero.name) }));
+    ({ label: hero.user ? `${hero.name} (yours)` : hero.name, type: 'checkbox', checked: hero.name.toLowerCase() === current, click: () => setHero(hero.name) }));
 
+  const waterValues = reminders.WATER_CHOICES.includes(settings.WaterMinutes) ? reminders.WATER_CHOICES : [...reminders.WATER_CHOICES, settings.WaterMinutes].sort((a, b) => a - b);
   const remindersMenu = {
     label: 'Reminders',
     submenu: [
-      { label: 'Drink water every 30 minutes', type: 'checkbox', checked: settings.WaterReminder, click: () => toggleReminder('WaterReminder') },
-      { label: 'Lunch at 3:00 PM', type: 'checkbox', checked: settings.LunchReminder, click: () => toggleReminder('LunchReminder') },
+      { label: `Drink water every ${settings.WaterMinutes} minutes`, type: 'checkbox', checked: settings.WaterReminder, click: () => toggleReminder('WaterReminder') },
+      { label: 'Water every', submenu: waterValues.map((m) => radio(m % 60 === 0 ? (m === 60 ? '1 hour' : `${m / 60} hours`) : `${m} minutes`, settings.WaterMinutes === m, () => setWaterMinutes(m))) },
+      { label: `Lunch at ${clockLabel(settings.LunchTime)}`, type: 'checkbox', checked: settings.LunchReminder, click: () => toggleReminder('LunchReminder') },
+      { label: 'Lunch time', submenu: lunchChoices().map((t) => radio(clockLabel(t), settings.LunchTime === t, () => setLunchTime(t))) },
       ...(settings.CustomReminders.length ? [{ type: 'separator' }] : []),
       ...settings.CustomReminders.map((r) => ({
         label: `${menuText(r.text)}  (${reminders.describeCustom(r)})`,
@@ -1103,8 +1768,10 @@ function buildMenu() {
         checked: r.on,
         click: () => toggleCustomReminder(r.id),
       })),
+      ...(onceReminders.length ? [{ type: 'separator' }] : []),
+      ...onceReminders.map((o) => ({ label: `${menuText(o.text)}  (at ${o.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, once)`, enabled: false })),
       { type: 'separator' },
-      { label: 'Add or edit reminders…', click: openReminders },
+      { label: 'Edit your reminders…', click: openReminders },
       { label: 'Show a test reminder', click: () => remind({ kind: 'water', text: reminders.TEXT.water }) },
     ],
   };
@@ -1114,22 +1781,62 @@ function buildMenu() {
     checked: settings.StartAutomatically,
     click: toggleStartAutomatically,
   };
+  const hotkeyItem = {
+    label: `Keyboard shortcuts (${isMac ? '⌃⌥⇧' : 'Ctrl+Alt+Shift+'} H hide, S swing, W web-swing, F focus)`,
+    type: 'checkbox',
+    checked: settings.Hotkeys,
+    click: () => toggleSetting('Hotkeys', applyHotkeys),
+  };
+  const fullScreenItem = isMac
+    ? [{ label: 'Hide over full-screen apps', type: 'checkbox', checked: settings.HideInFullScreen, click: () => setHideInFullScreen(!settings.HideInFullScreen) }]
+    : [];
   const quitItem = { label: 'Quit Spidey Hang', click: quit };
 
-  if (settings.Down) {
+  if (settings.Down || hidden) {
+    const until = hidden && hidden.until ? ` (back at ${new Date(hidden.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})` : '';
     return Menu.buildFromTemplate([
-      { label: 'Bring him back', click: bringBack },
+      { label: hidden ? `Show him${until}` : 'Bring him back', accelerator: 'Control+Alt+Shift+H', registerAccelerator: false, click: hidden ? showAgain : bringBack },
       { type: 'separator' },
+      focusMenu(),
       remindersMenu,
       { type: 'separator' },
+      hotkeyItem,
       startItem,
       quitItem,
     ]);
   }
 
+  const personality = {
+    label: 'Personality',
+    submenu: [
+      { label: 'React to the computer (doze, greet, battery)', type: 'checkbox', checked: settings.Reactions, click: () => setReactions(!settings.Reactions) },
+      { label: 'Doze after', enabled: settings.Reactions, submenu: [2, 5, 10, 15, 30].map((m) => radio(`${m} minutes away`, settings.IdleMinutes === m, () => {
+        settings.IdleMinutes = m;
+        settings.save();
+        log.write(`Doze after: ${m} min`);
+      })) },
+      { type: 'separator' },
+      { label: 'Do little things on his own', type: 'checkbox', checked: settings.Antics, click: () => toggleSetting('Antics', scheduleAntic) },
+      { label: 'Do something now', click: () => doAntic(null, true) },
+      { type: 'separator' },
+      { label: 'Sounds', type: 'checkbox', checked: settings.Sounds, click: () => toggleSetting('Sounds', () => post(hangWin, 'flags', flags())) },
+    ],
+  };
+
   const template = [
-    { label: 'Give him a swing', click: () => swing() },
-    { label: 'Swing across the screen', click: () => post(hangWin, 'travel') },
+    { label: 'Give him a swing', accelerator: 'Control+Alt+Shift+S', registerAccelerator: false, click: () => swing() },
+    {
+      label: 'Web-swing to',
+      submenu: [
+        { label: 'Left', click: () => webSwing('left') },
+        { label: 'Center', click: () => webSwing('center') },
+        { label: 'Right', click: () => webSwing('right') },
+        { label: 'Somewhere else', click: () => webSwing('random') },
+        { label: 'Where the pointer is', accelerator: 'Control+Alt+Shift+W', registerAccelerator: false, click: () => webSwing('pointer') },
+        { type: 'separator' },
+        { label: 'Across the screen', click: () => post(hangWin, 'travel') },
+      ],
+    },
     { label: 'Reset', click: () => applyLayout() },
     { type: 'separator' },
     {
@@ -1139,6 +1846,7 @@ function buildMenu() {
     },
     { label: 'Size', submenu: ['Small', 'Medium', 'Large'].map((n) => radio(n, settings.Size === n, relayout(() => (settings.Size = n)))) },
     { label: 'Rope length', submenu: ['Short', 'Medium', 'Long'].map((n) => radio(n, settings.Rope === n, relayout(() => (settings.Rope = n)))) },
+    screenMenu(),
     {
       label: 'Hero',
       submenu: [
@@ -1148,14 +1856,31 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Change hero every', submenu: [0, 2, 5, 10, 30].map((m) => radio(m === 0 ? 'Never' : `${m} minutes`, settings.RotateMinutes === m, () => setRotate(m))) },
         { label: 'Next hero', click: nextHero },
+        { type: 'separator' },
+        { label: 'Add a hero from a picture…', click: addHeroFromPicture },
+        { label: 'Open your heroes folder', click: openHeroesFolder },
+        { label: 'Reload heroes', click: reloadHeroes },
       ],
     },
     { label: 'Swing on his own', type: 'checkbox', checked: settings.AutoSwing, click: () => setAutoSwing(!settings.AutoSwing) },
     { label: 'Breeze', type: 'checkbox', checked: settings.Breeze, click: toggleBreeze },
+    personality,
+    focusMenu(),
     remindersMenu,
     { type: 'separator' },
-    startItem,
+    {
+      label: 'Hide him',
+      submenu: [
+        { label: 'For 15 minutes', click: () => hide(15) },
+        { label: 'For 1 hour', click: () => hide(60) },
+        { label: 'Until you bring him back', accelerator: 'Control+Alt+Shift+H', registerAccelerator: false, click: () => hide(0) },
+      ],
+    },
     { label: 'Take him down', click: takeDown },
+    { type: 'separator' },
+    hotkeyItem,
+    ...fullScreenItem,
+    startItem,
     quitItem,
   ];
   return Menu.buildFromTemplate(template);

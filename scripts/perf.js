@@ -88,6 +88,8 @@ async function main() {
   fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({
     AnchorFraction: 0.5, Size: 'Large', Rope: 'Long', Breeze: false, AutoSwing: false, Hero: HERO,
     RotateMinutes: 0, StartAutomatically: false, WaterReminder: false, LunchReminder: false, CustomReminders: [],
+    // Nothing he would do on his own: no dozing when you step away mid-run, no antics, no hotkeys.
+    Reactions: false, Antics: false, Hotkeys: false,
   }, null, 2));
 
   console.log(`Measuring ${APP} (${LABEL}), hero ${HERO}, Large, Long rope. Leave him alone until it ends.`);

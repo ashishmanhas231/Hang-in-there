@@ -68,8 +68,9 @@ download (roughly 100 MB on Windows), and that is the floor for any Electron app
 - **Drag him** by the body or the rope. Let go to fling him.
 - **Click him** for a nudge, or **brush the cursor across him** to push him.
 - **Drag the little web knot** at the top of the screen to move where he hangs.
-- **Right-click him** for the menu: position, size, rope length, hero, breeze, swing on his own, start
-  automatically, take him down and quit. The same menu is on the tray icon (Windows: by the clock; macOS: the menu bar; Ubuntu: the top bar).
+- **Right-click him** for the menu: web-swing, position, size, rope length, screen, hero, breeze,
+  swing on his own, personality, focus timer, reminders, hide him, take him down, keyboard shortcuts,
+  start automatically and quit. The same menu is on the tray icon (Windows: by the clock; macOS: the menu bar; Ubuntu: the top bar).
 - **Windows:** left-click the tray icon to give him a swing. **macOS:** click the menu bar icon; "Give him
   a swing" is the first item.
 - Starting the app again while he is up gives him a swing instead of opening a second one.
@@ -85,22 +86,25 @@ him moving, so they use that all the time.
 **Swing on his own** keeps a steady swing of about 30 degrees going, like pumping a playground swing.
 If you drop the web too close to a screen edge, it slides back in just far enough for a full swing.
 
-### Swinging across the screen
+### Web-swinging
 
-**Double-click him** (or choose **Swing across the screen** in his menu) and he swings to the other
-side of the screen web to web, like Spider-Man between buildings. He leans back, swings forward, lets
+**Double-click him** and he swings 30 to 60% of the way across the screen, towards the side with more
+room. **Web-swing to** in his menu sends him **Left**, to the **Center**, **Right**, **Somewhere else**,
+to **Where the pointer is** (also ⌃⌥⇧W anywhere) or **Across the screen** to the other side. He goes
+web to web, like Spider-Man between buildings. He leans back, swings forward, lets
 go on the way up and flies through the air; on the way down the next web shoots from his hand and
 catches him, and he swings straight on without losing speed. The trip is split into equal
-hops. The last web is tied at the same spot as **Position > Left** or **Right**, and he swings to a
-stop there. The new spot is remembered, so he starts there next time. Double-click again to swing back.
+hops. The last web is tied at the spot, and he swings to a stop there. The new spot is remembered, so
+he starts there next time.
 
 - **Grab him** mid-swing to stop: he hangs from the web he has, and that spot is remembered instead.
 - With **Swing on his own** on, he stops far enough in from the edge to keep swinging.
 - With **Reduce motion** turned on in your system's accessibility settings, he glides across calmly
   instead.
 
-Reminders (**Reminders** in the menu): "Time to drink some water" on every half hour, and "It's your
-lunch time" at 3:00 PM. They appear in a speech bubble just above his face, in every pose. A hero with
+Reminders (**Reminders** in the menu): "Time to drink some water" every 30 minutes (**Water every**: 15
+minutes to 2 hours, lined up with the clock, so every 30 minutes means :00 and :30), and "It's your
+lunch time" at 3:00 PM (**Lunch time**). They appear in a speech bubble just above his face, in every pose. A hero with
 a web hand marked (all the bundled ones) shoots a quick web from that hand as the bubble pops up.
 
 ### Taking him down
@@ -121,7 +125,8 @@ the app completely.
 
 ### Your own reminders
 
-**Reminders > Add or edit reminders…** opens a small window where you write your own:
+**Reminders > Edit your reminders…** opens a small window (where the water interval and lunch time
+can be changed too) where you write your own:
 
 - **A message**, up to 120 characters: "Stand up and stretch", "Standup in 5 minutes", anything.
 - **When:** at a time each day (10:30 AM), or every so many minutes (5 to 1440). "Every" counts
@@ -135,6 +140,51 @@ away with **Show**. They are also listed in the **Reminders** menu, where a clic
 off. When several reminders are due at once, he says them one after another. A reminder that comes
 due while the computer is asleep is skipped, not shown late. They are kept in `settings.json`
 (`CustomReminders`).
+
+**One-off reminders** come from the command line: `npm run spidey -- remind in 10 Tea is ready`, or
+`remind at 15:30 Call back`. They are kept in memory only, so a restart forgets them. One that came due
+while the computer slept is shown as soon as it wakes. They are listed in the **Reminders** menu.
+
+### Focus timer
+
+**Focus timer > Start** (or ⌃⌥⇧F) starts a 25 minute focus, then a 5 minute break; every 4th break is
+a 15 minute one; then focus again until you **Stop** it. All three lengths are in the menu. The time
+left shows next to the menu bar icon on macOS (in the tray tooltip elsewhere), updated once a minute
+and every second in the last minute. When a focus ends he swings big and tells you to take a break;
+when a break ends he says so too. It works from the clock, so a computer that slept comes back to the
+right part. He does no antics during a focus.
+
+### Personality
+
+**Personality > React to the computer** (on by default):
+
+- After 5 minutes with no keyboard or mouse (**Doze after**: 2 to 30), with the screen locked, or with
+  the computer asleep, he **dozes**: a few z's float up beside his face and stay there, and breeze and
+  swinging on his own pause.
+- When you come back, unlock or wake the computer, he stretches (a small swing) and **greets** you:
+  "Good morning!" (or afternoon, evening) the first time each day, then "Welcome back!" and the like.
+- On battery power, a warning bubble once when it drops below 20% and once below 10%, and a thank you
+  when you plug in after one. A computer with no battery never warns.
+
+**Personality > Do little things on his own** (on by default): every 3 to 7 minutes at rest he
+wiggles, bungees (drops on a longer web and climbs back), swings big, hops a little way on a new web,
+or says something ("Just hanging around."). Not while he dozes, is hidden or during a focus.
+**Do something now** does one straight away. They use physics only: a picture hero has no other poses.
+
+**Personality > Sounds** (off by default): a "thwip" when a web shoots and a whoosh when you fling him
+hard, made on the spot (no sound files). The sound engine sleeps between sounds.
+
+### Screens, hiding and keyboard shortcuts
+
+- **Screen:** the main screen, any other screen, or **Follow the pointer**, where he drops in on
+  whichever screen the pointer is on.
+- **Hide him:** for 15 minutes, 1 hour, or until you bring him back. He climbs out of sight, and
+  reminders show as system notifications meanwhile. **Show him** at the top of the menu ends it early.
+- **Hide over full-screen apps** (macOS, on by default): he is not shown over an app in full screen.
+  Windows gives no way to tell that another app is full screen, so use ⌃⌥⇧H (Ctrl+Alt+Shift+H) there.
+- **Keyboard shortcuts** (on by default), anywhere: Control+Option+Shift on macOS, Ctrl+Alt+Shift
+  elsewhere, with **H** hide or show him, **S** swing, **W** web-swing to the pointer, **F** start or stop
+  a focus. A shortcut another app already has is skipped and noted in the log.
 
 ### Starting automatically
 
@@ -151,6 +201,12 @@ The entry is refreshed each time the app starts, so it always points at the copy
 Untick the option to remove it.
 
 ## Heroes
+
+**Your own heroes:** **Hero > Add a hero from a picture…** copies a picture into
+`~/.spidey-hang/heroes/<name>/hang.png` (or .webp, .jpg …) and switches to it. **Open your heroes
+folder** shows that folder, with a README.txt explaining the layout (the same as the bundled heroes
+below, hero.json included); **Reload heroes** reads changes without a restart. Yours show "(yours)"
+in the menu, and one with the same name as a bundled hero is used instead of it.
 
 Pick one from **Hero** in the menu. **Hero > Change hero every** rotates through them on a timer.
 
@@ -203,7 +259,7 @@ The six heroes' pictures take about 316 KB.
 ## Where things are kept
 
 Everything lives in `~/.spidey-hang` (`%USERPROFILE%\.spidey-hang` on Windows): settings
-(`settings.json`) and the log (`log.txt`). Problems are written to
+(`settings.json`), the log (`log.txt`) and your own heroes (`heroes/`). Problems are written to
 the log along with each start and layout. Check it first if he misbehaves.
 
 Not `%APPDATA%` on Windows: apps installed from the Microsoft Store have their AppData writes silently
@@ -215,13 +271,19 @@ A running Spidey takes one-line text commands: `push [strength]`, `reset`, `swin
 `breeze on|off|toggle`, `hero <name>|next`, `rotate <minutes>`, `remind water|lunch|<text>`,
 `remind-web <text>` (a Big web reminder; a bubble while he is up), `dismiss` (closes the reminder
 showing), `down` and `up` (take him down, bring him back), `reminders` (opens the Reminders window),
-`travel` (swings across to the other side of the screen), `snapshot <file.png>`,
+`travel` (swings across to the other side of the screen), `web left|center|right|random|pointer|<0..1>`
+(web-swing there), `remind in <minutes> <text>` and `remind at <time> <text>` (one-off reminders),
+`focus start [minutes]|stop|skip|status`, `hide [minutes]` and `show`, `antic [wiggle|bungee|swing|say|web]`,
+`sleep`, `wake` and `greet`, `snapshot <file.png>`,
 `capture <file.png>`, `stats`, `metrics [seconds]` and `exit` (quits). They travel over the named pipe `\\.\pipe\SpideyHang` on
 Windows and the Unix socket `~/.spidey-hang/spidey.sock` on macOS and Linux, which only your own account can open.
 `snapshot` saves only what Spidey himself draws, never the screen behind it; `capture` saves his whole
 window as it looks, bubble and Big web text included (still nothing behind it). `metrics` writes to the
 log how much CPU and memory each of the app's processes used over that many seconds (10 by default),
 with how many frames the page drew.
+
+`npm run spidey -- <command>` (scripts/spidey.js) sends one, so a script or git hook can make him talk:
+`npm run spidey -- remind "Build passed"`. It exits with 1 if Spidey is not running.
 
 The app's command line takes `--push [n]`, `--reset`, `--exit` and `--reminders` as well.
 

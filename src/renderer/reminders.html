@@ -72,8 +72,14 @@
     <section aria-labelledby="builtin">
       <h2 id="builtin">Built in</h2>
       <div class="card">
-        <label class="row toggle-row"><input id="water" type="checkbox"> <span>Drink water every 30 minutes</span></label>
-        <label class="row toggle-row"><input id="lunch" type="checkbox"> <span>Lunch at 3:00 PM</span></label>
+        <div class="row toggle-row">
+          <label class="grow"><input id="water" type="checkbox"> <span>Drink water every</span></label>
+          <select id="water-minutes" aria-label="Minutes between water reminders"></select>
+        </div>
+        <div class="row toggle-row">
+          <label class="grow"><input id="lunch" type="checkbox"> <span>Lunch at</span></label>
+          <input id="lunch-time" type="time" value="15:00" aria-label="Lunch time">
+        </div>
       </div>
     </section>
   </main>

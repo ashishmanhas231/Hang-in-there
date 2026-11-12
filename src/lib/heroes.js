@@ -20,11 +20,16 @@
  *             hero can mix poses without copies. It has to stay inside the folder holding the heroes.
  * Points are pixels of the picture, from its top left corner.
  *
- * The folders never change while the app runs, so they are read once and kept.
+ * Your own heroes live in ~/.spidey-hang/heroes/<name>/ and are laid out the same way. One of yours
+ * with the same name as a hero that ships with the app is used instead of it. They are marked
+ * user: true.
+ *
+ * The folders are read once and kept; refresh() reads them again (Hero > Reload heroes).
  */
 const fs = require('fs');
 const path = require('path');
 const log = require('./log');
+const paths = require('./paths');
 
 const POSE_NAMES = ['hang', 'swing', 'fly', 'grab'];
 const PICTURE_TYPES = ['.png', '.webp', '.gif', '.bmp', '.jpg', '.jpeg'];
@@ -36,12 +41,91 @@ const byName = (a, b) => a.toLowerCase().localeCompare(b.toLowerCase());
 
 let cache = null;
 
-/** Every hero that ships with the app, sorted by name. Read on first use, then kept. */
+/** ~/.spidey-hang/heroes: the user's own heroes. */
+function userDir() {
+  return path.join(paths.dataDir(), 'heroes');
+}
+
+/**
+ * Every hero: those that ship with the app and the user's own, sorted by name. Read on first use,
+ * then kept until refresh().
+ */
 function scan() {
   if (!cache) {
-    cache = scanFolder(BUNDLED_DIR);
+    const mine = scanFolder(userDir()).map((h) => ({ ...h, user: true }));
+    const taken = new Set(mine.map((h) => h.name.toLowerCase()));
+    cache = [...scanFolder(BUNDLED_DIR).filter((h) => !taken.has(h.name.toLowerCase())), ...mine]
+      .sort((a, b) => byName(a.name, b.name));
   }
   return cache;
+}
+
+/** Forgets what was read, so the next scan() sees changes to the folders. */
+function refresh() {
+  cache = null;
+  return scan();
+}
+
+const README = `Your own Spidey Hang heroes
+===========================
+
+Each folder here is one hero, named after the folder. Put pictures in it named:
+
+  hang.png    hanging at rest (needed)
+  swing.png   while he moves (optional; hang is used without it)
+
+.png .webp .gif .bmp .jpg and .jpeg all work. A transparent background looks best.
+The web ties on at the middle of the top edge of the picture, so draw him upside down.
+
+An optional hero.json says where his hand holds the web and where his face is (pixels from the
+top left corner of the picture):
+
+  { "poses": { "hang": { "points": { "grip": [120, 10], "face": [120, 300], "hand": [120, 10] }, "faceSize": 60 } } }
+
+A folder with the same name as a hero that comes with the app is used instead of it.
+After changing anything here, pick Hero > Reload heroes in his menu.
+`;
+
+/** Makes ~/.spidey-hang/heroes with a README.txt in it. Returns the folder. */
+function ensureUserDir() {
+  const dir = userDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const readme = path.join(dir, 'README.txt');
+  if (!fs.existsSync(readme)) {
+    fs.writeFileSync(readme, README);
+  }
+  return dir;
+}
+
+/** A folder name from a picture's file name: no characters that are not allowed in file names. */
+function heroNameFor(file) {
+  const base = path.basename(file, path.extname(file)).replace(/[\\/:*?"<>|\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (base || 'My hero').slice(0, 60);
+}
+
+/**
+ * Copies a picture into a new hero folder of the user's, as its hang pose, and returns the hero.
+ * The name is the picture's file name; " 2", " 3" ... are added if it is taken.
+ */
+function addFromPicture(file, name) {
+  const ext = path.extname(file).toLowerCase();
+  if (!PICTURE_TYPES.includes(ext)) {
+    throw new Error(`Not a picture this app can show (${PICTURE_TYPES.join(' ')})`);
+  }
+  if (!fs.statSync(file).isFile()) {
+    throw new Error('Not a file');
+  }
+  const root = ensureUserDir();
+  const base = name ? heroNameFor(name) : heroNameFor(file);
+  let folderName = base;
+  for (let n = 2; fs.existsSync(path.join(root, folderName)); n++) {
+    folderName = `${base} ${n}`;
+  }
+  const dir = path.join(root, folderName);
+  fs.mkdirSync(dir);
+  fs.copyFileSync(file, path.join(dir, 'hang' + ext));
+  refresh();
+  return find(folderName);
 }
 
 function scanFolder(folder) {
@@ -172,4 +256,4 @@ function readPose(json) {
   };
 }
 
-module.exports = { scan, find, readFolder, parseLooseJson, POSE_NAMES, PICTURE_TYPES, BUNDLED_DIR };
+module.exports = { scan, refresh, find, readFolder, userDir, ensureUserDir, addFromPicture, heroNameFor, parseLooseJson, POSE_NAMES, PICTURE_TYPES, BUNDLED_DIR };

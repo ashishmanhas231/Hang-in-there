@@ -61,6 +61,14 @@ async function waitFor(what, test, ms = 8000) {
 
 const logHas = (pattern) => waitFor(`log line ${pattern}`, () => pattern.test(logText()));
 
+/** Closes the bubble showing and any waiting their turn (the next one shows 0.5 s after one closes). */
+async function clearBubbles() {
+  for (let i = 0; i < 5; i++) {
+    await ipc.send('dismiss');
+    await sleep(700);
+  }
+}
+
 function isPng(file) {
   const head = fs.readFileSync(file).subarray(0, 4);
   return head[0] === 0x89 && head.toString('ascii', 1, 4) === 'PNG';
@@ -149,6 +157,73 @@ async function main() {
       await waitFor('the new spot saved', () => Math.abs(saved() - before) > 0.3);
     });
 
+    await check('web-swing to a chosen spot: he lands there and the spot is saved', async () => {
+      const saved = () => JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).AnchorFraction;
+      const landings = () => (logText().match(/Swung across: web now at/g) || []).length;
+      const before = landings();
+      await ipc.send('web 0.3');
+      await logHas(/Web-swing to 0\.3 \(\d+\)/);
+      await waitFor('the landing', () => landings() > before, 12000);
+      await waitFor('the new spot saved', () => Math.abs(saved() - 0.3) < 0.02);
+      await ipc.send('web nowhere');
+      await sleep(300);
+      assert.doesNotMatch(logText(), /Web-swing to nowhere/);
+    });
+
+    await check('antics: wiggle, bungee, swing, a line in his bubble, a short web-hop', async () => {
+      // Nothing else going on: an antic is skipped while a bubble shows or he is still on his way.
+      await ipc.send('dismiss');
+      await sleep(2500);
+      for (const kind of ['wiggle', 'bungee', 'swing']) {
+        await ipc.send(`antic ${kind}`);
+        await logHas(new RegExp(`Antic: ${kind}`));
+        await sleep(kind === 'bungee' ? 2600 : 900);
+      }
+      assert.doesNotMatch(logText(), /Antic (wiggle|bungee|swing) skipped/);
+      const bubbles = (logText().match(/Reminder shown \(bubble\)/g) || []).length;
+      await ipc.send('antic say');
+      await waitFor('his line', () => (logText().match(/Reminder shown \(bubble\)/g) || []).length > bubbles);
+      await clearBubbles();
+      const hops = (logText().match(/Swung across: web now at/g) || []).length;
+      await ipc.send('antic web');
+      await waitFor('the hop', () => (logText().match(/Swung across: web now at/g) || []).length > hops, 12000);
+    });
+
+    await check('dozing and waking: z\'s while away, then a greeting, and the day is kept', async () => {
+      await sleep(600);
+      await ipc.send('sleep');
+      await logHas(/Dozing \(the sleep command\)/);
+      await logHas(/Dozing off/);
+      await ipc.send('wake');
+      await logHas(/Woke up/);
+      await logHas(/Greeting: (Good morning!|Good afternoon!|Good evening!|Up late\? Me too!)/);
+      await waitFor('the day saved', () => /^\d{4}-\d{2}-\d{2}$/.test(JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).LastGreeting));
+      await ipc.send('greet');
+      await waitFor('a second greeting', () => (logText().match(/Greeting: /g) || []).length >= 2);
+      await clearBubbles();
+    });
+
+    await check('focus timer: start, skip to the break, stop', async () => {
+      await ipc.send('focus start 1');
+      await logHas(/Focus started: Focus: 1 min left/);
+      await ipc.send('focus skip');
+      await logHas(/Reminder \(focus\): Focus done! Take a 5 minute break\./);
+      await ipc.send('focus status');
+      await logHas(/Focus status: Break: 5 min left \(1 focus done\)/);
+      await ipc.send('focus stop');
+      await logHas(/Focus stopped/);
+      await clearBubbles();
+    });
+
+    await check('a one-off reminder ("remind in") is shown when due, once', async () => {
+      await ipc.send('remind in 0.02 Tea is ready');
+      await logHas(/One-off reminder at .+: Tea is ready/);
+      await logHas(/Reminder \(once\): Tea is ready/);
+      await sleep(1500);
+      assert.equal(logText().match(/Reminder \(once\): Tea is ready/g).length, 1);
+      await clearBubbles();
+    });
+
     await check('the drawing, hero rotation on and off, next hero, stats, reset', async () => {
       await ipc.send('hero Drawn Spider-Man');
       await logHas(/Look: drawn Spider-Man/);
@@ -235,6 +310,20 @@ async function main() {
       await waitFor('the window to close', () => (logText().match(/Window closed/g) || []).length > closed, 10000);
       await ipc.send('up');
       await logHas(/Brought back[\s\S]*Brought back/);
+    });
+
+    await check('hide him: he climbs out, reminders become notifications, show brings him back', async () => {
+      const closed = (logText().match(/Window closed/g) || []).length;
+      await ipc.send('hide 5');
+      await logHas(/Hidden for 5 min; reminders become notifications/);
+      await waitFor('the window to close', () => (logText().match(/Window closed/g) || []).length > closed, 10000);
+      await ipc.send('remind While you were out');
+      await logHas(/Reminder \(note\): While you were out \[hidden: notification\]/);
+      const looks = (logText().match(/Look: /g) || []).length;
+      await ipc.send('show');
+      await logHas(/Shown again/);
+      await waitFor('his look', () => (logText().match(/Look: /g) || []).length > looks);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8')).Down, false);
     });
 
     await check('start automatically wrote a sign-in entry (under the test folder, never the real one)', async () => {

@@ -30,7 +30,12 @@
 
   /** { left, top, width, height, work: {x, y, width, height}, rope, body } in screen units. */
   let layout = null;
+  /** What the menu asks for, and what he does: breeze and swinging on his own pause while he dozes. */
+  let wanted = { breeze: false, autoSwing: false, sounds: false };
   let flags = { breeze: false, autoSwing: false };
+  /** Away from the computer: z's over his face, no breeze or swinging on his own. */
+  let dozing = false;
+  const zzz = document.getElementById('zzz');
   let dpr = window.devicePixelRatio || 1;
   let lookRequest = 0;
 
@@ -68,6 +73,8 @@
 
   /** The trip across the screen in progress (travel.js), or null. */
   let travel = null;
+  /** A trip asked for while another was still going: { to }, started when it ends. */
+  let nextTrip = null;
   /** This window is open only to deliver reminders while he is taken down (a visit). */
   let visit = false;
   /** Where Big web reminders land, { x, y, size } in window units, or null when none can come. */
@@ -109,10 +116,15 @@
   /** Hangs him straight with a small swing, sized and placed as the main process worked out. */
   async function setup(data) {
     // A new layout (reset, new size, another screen) ends any trip across the screen.
+    nextTrip = null;
     endTravel();
     camera = null;
     layout = data.layout;
-    flags = data.flags;
+    wanted = { ...data.flags };
+    dozing = Boolean(data.doze);
+    flags = effectiveFlags();
+    SH.sound.enabled = Boolean(wanted.sounds);
+    endBungee();
     shaping = Boolean(data.shapeMouse);
     lastShape = '';
     lastShapeAnkle = null;
@@ -146,6 +158,7 @@
       // Brought back while dropping in for a reminder: it is still delivered.
       showReminder(waiting.shift());
     }
+    showZzz(dozing);
   }
 
   /** The window grew to make room for a Big web (main.js growForWeb): everything stays put on screen. */
@@ -166,6 +179,9 @@
     sizeCanvas();
     setVisibleArea();
     wake();
+    if (bungeeWaiting) {
+      startBungee();
+    }
   }
 
   /** What the shown look was made from, so the same look at the same size is not decoded again. */
@@ -197,8 +213,11 @@
 
   /** Breeze or "swing on his own" changed. Starting a swing from still gives him a push. */
   function setFlags(data) {
-    const turnedOn = data.autoSwing && !flags.autoSwing;
-    flags = { breeze: data.breeze, autoSwing: data.autoSwing };
+    const before = flags;
+    wanted = { ...data };
+    SH.sound.enabled = Boolean(wanted.sounds);
+    flags = effectiveFlags();
+    const turnedOn = flags.autoSwing && !before.autoSwing;
     if (turnedOn && layout && !travel) {
       // Slide the web in from a screen edge if he would not have room to swing there.
       const anchorX = layout.left + rig.anchor.x;
@@ -213,6 +232,63 @@
       }
     }
     wake();
+  }
+
+  function effectiveFlags() {
+    return dozing ? { breeze: false, autoSwing: false } : { breeze: Boolean(wanted.breeze), autoSwing: Boolean(wanted.autoSwing) };
+  }
+
+  // ---- Dozing ---------------------------------------------------------------------------
+
+  /** Dozes off (z's, no breeze or swinging on his own) or wakes with a stretch. */
+  function setDoze(on) {
+    if (on === dozing) {
+      return;
+    }
+    dozing = on;
+    const before = flags;
+    flags = effectiveFlags();
+    if (on) {
+      log('Dozing off');
+    } else {
+      log('Woke up');
+      rig.kick(0.35); // a stretch
+      stage.jerk(0.5);
+      if (flags.autoSwing && !before.autoSwing && rig.motion() < 0.5) {
+        rig.kick(0.8);
+      }
+    }
+    showZzz(on);
+    wake();
+  }
+
+  function showZzz(on) {
+    if (on && layout) {
+      zzz.hidden = false;
+      // Restart the float each time he dozes off.
+      zzz.querySelectorAll('span').forEach((el) => {
+        el.style.animation = 'none';
+        void el.offsetWidth;
+        el.style.animation = '';
+      });
+      placeZzz();
+    } else {
+      zzz.hidden = true;
+    }
+  }
+
+  /** Keeps the z's at his face, on the side with more room. */
+  function placeZzz() {
+    if (zzz.hidden || !layout) {
+      return;
+    }
+    const face = stage.facePoint() || { x: rig.head.x, y: rig.head.y, r: layout.body * 0.12 };
+    const left = rig.anchor.x - Math.max(0, rig.visibleLeft) > Math.min(layout.width, rig.visibleRight) - rig.anchor.x;
+    zzz.classList.toggle('left', left);
+    // Beside his face, clear of his body, rising up and outwards (overlay.css).
+    const x = face.x + (left ? -face.r * 1.15 - 14 : face.r * 1.15);
+    const y = face.y + face.r * 0.2;
+    zzz.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
   }
 
   // ---- Animation loop -------------------------------------------------------------------
@@ -323,10 +399,11 @@
     stage.advance(frameDt);
     draw();
     placeBubble();
+    placeZzz();
 
     // 0.02 units per step is about 5 units a second: too slow to see.
     const still = !flags.breeze && !flags.autoSwing && !dragged && !draggingAnchor && !moving &&
-      !arriving && !leaving && !rig.reeling && webshot.settled && rig.motion() < 0.02 && stage.settled;
+      !arriving && !leaving && !bungee && !rig.reeling && webshot.settled && rig.motion() < 0.02 && stage.settled;
     quietTime = still ? quietTime + frameDt : 0;
     if (quietTime > 0.5) {
       rig.freeze();
@@ -348,17 +425,35 @@
     });
   }
 
-  /** Sends him to the other side of the screen: web to web, or a calm glide with reduced motion. */
-  function startTravel() {
-    if (!layout || travel || dragged || draggingAnchor) {
+  /**
+   * Sends him web to web (or in a calm glide with reduced motion): to targetX (screen units) if
+   * given, else to the other side of the screen.
+   */
+  function startTravel(to) {
+    if (travel && !dragged && !draggingAnchor) {
+      // Still on his way, or settling on the last web: this trip starts as soon as that one ends.
+      nextTrip = { to };
       return;
     }
+    if (!layout || travel || dragged || draggingAnchor || arriving || leaving) {
+      log('Web-swing skipped: busy');
+      return;
+    }
+    endBungee();
     const from = layout.left + rig.anchor.x;
     const plan = Travel.plan(from, layout.work);
     let targetX = plan.targetX;
+    if (Number.isFinite(to)) {
+      const work = layout.work;
+      targetX = Math.max(work.x + 20, Math.min(work.x + work.width - 20, to));
+      plan.dir = targetX >= from ? 1 : -1;
+    }
     if (flags.autoSwing) {
       // Far enough in from the edge to keep swinging on his own when he gets there.
       targetX = Rig.roomToSwing(targetX, rig.ropeTarget || layout.rope, layout.body, layout.work);
+    }
+    if (Math.abs(targetX - from) < 20) {
+      return; // already there
     }
     if (reducedMotion()) {
       log(`Gliding across (reduced motion): web from ${Math.round(from)} to ${Math.round(targetX)}`);
@@ -368,6 +463,7 @@
       return;
     }
     log(`Swinging across: web from ${Math.round(from)} to ${Math.round(targetX)}`);
+    SH.sound.whoosh(0.6);
     travel = new Travel(rig, plan.dir, targetX, rig.ropeTarget || layout.rope);
     travel.begin(layout.left);
     stage.travelling = true;
@@ -381,6 +477,7 @@
     if (event && event.type === 'release') {
       stage.letGoWeb();
     } else if (event && event.type === 'catch') {
+      SH.sound.thwip();
       stage.jerk(0.7); // the new web snaps taut
       if (event.last) {
         landed(event.anchorX);
@@ -391,6 +488,11 @@
         landed(layout.left + rig.anchor.x); // gave up on the way: he stays where he is
       }
       endTravel();
+      if (nextTrip) {
+        const { to } = nextTrip;
+        nextTrip = null;
+        setTimeout(() => startTravel(to), 0); // after this physics step
+      }
     }
   }
 
@@ -402,6 +504,18 @@
     stage.travelling = false;
     stage.aim = null;
     wake(); // full frame rate a while longer, as after any touch, while he settles
+  }
+
+  /**
+   * Where a double-click sends him: 30 to 60% of the screen across, towards the side with more room.
+   */
+  function doubleClickTarget() {
+    const work = layout.work;
+    const from = layout.left + rig.anchor.x;
+    const dir = from - work.x < work.x + work.width - from ? 1 : -1;
+    const room = dir > 0 ? work.x + work.width * 0.92 - from : from - (work.x + work.width * 0.08);
+    const want = work.width * (0.3 + Math.random() * 0.3);
+    return from + dir * Math.max(0, Math.min(room, want));
   }
 
   /** He has his last web: remember the spot, as dropping the knot there would. */
@@ -532,6 +646,7 @@
     log('Reminder shown (bubble)');
     rig.kick(0.4); // a little swing to catch the eye
     if (stage.hasHand() && layout) {
+      SH.sound.thwip();
       stage.tether = { to: { x: 0, y: 0 }, age: 0 };
       placeBubble();
       opening = setTimeout(() => {
@@ -653,7 +768,10 @@
       bubble.hide();
     }
     webshot.close();
+    nextTrip = null;
     endTravel();
+    endBungee();
+    zzz.hidden = true;
     dragged = null;
     draggingAnchor = false;
     arriving = null;
@@ -693,6 +811,144 @@
     stage.opacity = 1;
     rig.ropeTarget = 0;
     arriving = { age: 0.25, ready: true, from: rig.ropeLength };
+  }
+
+  // ---- Little things he does on his own (antics) ---------------------------------------------
+
+  /** A bungee drop in progress: { base, timers }, or null. */
+  let bungee = null;
+  /** Waiting for the window to grow for a bungee drop: its timer, or null. */
+  let bungeeWaiting = null;
+
+  /** Ends a bungee drop at once: the rope goes back to its usual length, the window to its usual size. */
+  function endBungee() {
+    if (bungeeWaiting) {
+      clearTimeout(bungeeWaiting);
+      bungeeWaiting = null;
+      api.send('room-below', { extra: 0 });
+    }
+    if (!bungee) {
+      return;
+    }
+    bungee.timers.forEach(clearTimeout);
+    rig.ropeTarget = bungee.base;
+    rig.ropeEase = SH.rig.ROPE_EASE;
+    bungee = null;
+    api.send('room-below', { extra: 0 });
+  }
+
+  /** Room left below him in the window for a rope of length `rope`. */
+  const roomBelow = (rope) => layout.height - (rope + layout.body * (1 + REACH_PAST_HEAD)) - 12;
+
+  /** Asks for room below him (the window grows for two seconds), then drops once it has. */
+  function requestBungee() {
+    const base = rig.ropeTarget || layout.rope;
+    const extra = Math.max(0, base / 3 - roomBelow(base)) + 4;
+    bungeeWaiting = setTimeout(startBungee, 400); // goes ahead with the room there is if no answer comes
+    api.send('room-below', { extra });
+  }
+
+  /** The drop itself: the rope plays out a third longer (as far as there is room), bounces, and he climbs back. */
+  function startBungee() {
+    clearTimeout(bungeeWaiting);
+    bungeeWaiting = null;
+    if (!layout || bungee || travel || dragged || leaving) {
+      api.send('room-below', { extra: 0 });
+      return;
+    }
+    const base = rig.ropeTarget || layout.rope;
+    const drop = Math.min(base / 3, roomBelow(base));
+    if (drop < 25) {
+      api.send('room-below', { extra: 0 });
+      rig.kick(1.2);
+      wake();
+      return;
+    }
+    bungee = { base, timers: [] };
+    rig.ropeEase = 0.03;
+    rig.ropeTarget = base + drop;
+    bungee.timers.push(setTimeout(() => {
+      // At the bottom: a bounce, then he climbs back up his web.
+      stage.jerk(0.7);
+      rig.ropeEase = 0.012;
+      rig.ropeTarget = base;
+      wake();
+    }, 700));
+    bungee.timers.push(setTimeout(() => {
+      rig.ropeEase = SH.rig.ROPE_EASE;
+      bungee = null;
+      api.send('room-below', { extra: 0 });
+      wake();
+    }, 2200));
+    wake();
+  }
+
+  /** True when he is free for an antic: not busy with anything else. */
+  function freeForAntic() {
+    return layout && !travel && !camera && !dragged && !draggingAnchor && !arriving && !leaving && !visit && !bungee && !bungeeWaiting && !showing() && !dozing;
+  }
+
+  /**
+   * One antic: 'wiggle', 'bungee' (drops on a longer web and climbs back), 'swing', 'say' (a line in
+   * his bubble) or 'web' (a short web-hop). Physics only: a picture hero has no other poses.
+   */
+  function antic(data) {
+    if (!freeForAntic()) {
+      log(`Antic ${data.kind} skipped: busy`);
+      return;
+    }
+    switch (data.kind) {
+      case 'wiggle':
+        rig.kick(0.35, 1);
+        later(() => rig.kick(0.55, -1), 280);
+        later(() => rig.kick(0.4, 1), 560);
+        break;
+      case 'bungee':
+        requestBungee();
+        break;
+      case 'swing':
+        rig.kick(1.4);
+        stage.jerk(0.8);
+        break;
+      case 'say':
+        if (data.text) {
+          showReminder({ text: String(data.text).slice(0, 120), style: 'bubble' });
+        }
+        break;
+      case 'web': {
+        // A short hop: an eighth to a fifth of the screen, towards the side with more room.
+        const work = layout.work;
+        const from = layout.left + rig.anchor.x;
+        const dir = from - work.x < work.x + work.width - from ? 1 : -1;
+        startTravel(from + dir * work.width * (0.12 + Math.random() * 0.08));
+        break;
+      }
+      default:
+        return;
+    }
+    wake();
+  }
+
+  /** A short delay that wakes the frame loop when it runs. */
+  function later(fn, ms) {
+    setTimeout(() => {
+      if (layout) {
+        fn();
+        wake();
+      }
+    }, ms);
+  }
+
+  // ---- Battery ----------------------------------------------------------------------------
+
+  /** Reports the battery to the main process when it changes (events only; nothing polls). */
+  if (navigator.getBattery) {
+    navigator.getBattery().then((battery) => {
+      const report = () => api.send('battery', { level: battery.level, charging: battery.charging });
+      battery.addEventListener('levelchange', report);
+      battery.addEventListener('chargingchange', report);
+      report();
+    }, () => {});
   }
 
   // ---- Frame timing record (the "stats" command) ------------------------------------------
@@ -768,6 +1024,8 @@
       return;
     }
     const pt = local(e);
+    endBungee();
+    nextTrip = null;
     if (travel) {
       // Caught mid-swing: he stops travelling and hangs from the web he has.
       endTravel();
@@ -833,10 +1091,17 @@
     } catch {
       // Not captured.
     }
+    if (dragged && dragMoved) {
+      // A hard fling: a whoosh. Speed of his hand, in units a second.
+      const speed = Math.hypot(rig.ankle.x - rig.ankle.px, rig.ankle.y - rig.ankle.py) / STEP;
+      if (speed > 900) {
+        SH.sound.whoosh(Math.min(1, speed / 1800));
+      }
+    }
     endDrag();
     updateHit(local(e));
     if (double) {
-      startTravel();
+      startTravel(doubleClickTarget());
     }
     wake();
   }
@@ -862,7 +1127,7 @@
   // already started him off; this catches a double-click slower than DOUBLE_CLICK_MS.
   canvas.addEventListener('dblclick', (e) => {
     if (layout && !rig.nearAnchor(local(e))) {
-      startTravel();
+      startTravel(doubleClickTarget());
     }
   });
 
@@ -954,6 +1219,9 @@
   api.on('leave', () => leave());
   api.on('grow', (data) => grow(data));
   api.on('travel', () => startTravel());
+  api.on('web-swing', (data) => startTravel(Number(data && data.targetX)));
+  api.on('antic', (data) => data && antic(data));
+  api.on('mood', (data) => data && setDoze(Boolean(data.doze)));
   api.on('snapshot', (data) => snapshot(data.path));
   api.on('stats', () => logStats());
   api.on('metrics', (data) => metrics(data));
@@ -985,6 +1253,10 @@
     ignoring,
     flags,
     travelling: travel !== null,
+    dozing,
+    zzz: !zzz.hidden,
+    bungee: bungee !== null,
+    ropeLength: rig.ropeLength,
     gliding: camera !== null,
     bubble: bubble.visible,
     web: webshot.active,

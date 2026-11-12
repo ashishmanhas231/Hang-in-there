@@ -56,7 +56,7 @@ h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: 
 .choice { display: flex; align-items: center; gap: 6px; width: 70px; }
 .hint { color: var(--muted); }
 
-input[type="text"], input[type="time"], input[type="number"] {
+input[type="text"], input[type="time"], input[type="number"], select {
   font: inherit; color: var(--text); background: var(--field);
   border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; min-height: 32px;
 }
@@ -99,3 +99,6 @@ button:active { filter: brightness(0.94); }
   .item { flex-wrap: wrap; }
   .tools { width: 100%; justify-content: flex-end; }
 }
+
+.row .grow { display: flex; align-items: center; gap: 10px; flex: 1; cursor: pointer; }
+.row select, .row input[type="time"] { width: auto; }

@@ -11,7 +11,7 @@
   // Monday first, as most calendars show the week.
   const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
-  let state = { water: true, lunch: true, custom: [] };
+  let state = { water: true, lunch: true, waterMinutes: 30, lunchTime: '15:00', custom: [] };
   let editingId = null;
   let undo = null;
 
@@ -211,6 +211,17 @@
     $('empty').hidden = state.custom.length > 0;
     $('water').checked = state.water;
     $('lunch').checked = state.lunch;
+    const choices = [...new Set([...(state.waterChoices || [15, 20, 30, 45, 60, 90, 120]), state.waterMinutes || 30])].sort((a, b) => a - b);
+    $('water-minutes').replaceChildren(...choices.map((m) => {
+      const option = document.createElement('option');
+      option.value = String(m);
+      option.textContent = m % 60 === 0 ? (m === 60 ? '1 hour' : `${m / 60} hours`) : `${m} minutes`;
+      return option;
+    }));
+    $('water-minutes').value = String(state.waterMinutes || 30);
+    if (document.activeElement !== $('lunch-time')) {
+      $('lunch-time').value = state.lunchTime || '15:00';
+    }
     if (undo) {
       list.append(undo.el);
     }
@@ -242,6 +253,12 @@
 
   $('water').addEventListener('change', () => save({ ...state, water: $('water').checked }));
   $('lunch').addEventListener('change', () => save({ ...state, lunch: $('lunch').checked }));
+  $('water-minutes').addEventListener('change', () => save({ ...state, waterMinutes: Number($('water-minutes').value) }));
+  $('lunch-time').addEventListener('change', () => {
+    if (/^\d{2}:\d{2}$/.test($('lunch-time').value)) {
+      save({ ...state, lunchTime: $('lunch-time').value });
+    }
+  });
 
   // ---- Saving ---------------------------------------------------------------------------------
 

@@ -33,7 +33,17 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 .webnote-text { min-height: 1.3em; }
 .webnote-caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 1px; vertical-align: -0.15em; background: #a3121f; }
 .webnote.typed .webnote-caret { display: none; }
+/* Dozing: z's float up from his face once, then stay put (no endless animation: idle stays at 0% CPU). */
+.zzz { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; font: italic 800 20px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; color: #f4f6ff; text-shadow: 0 0 2px #1b2140, 0 1px 4px rgba(0, 0, 0, 0.55); }
+.zzz[hidden] { display: none; }
+.zzz span { position: absolute; left: 0; top: 0; opacity: 0; animation: zzz-rise 1.6s ease-out forwards; }
+.zzz span:nth-child(1) { --x: 8px; --y: -12px; font-size: 14px; animation-delay: 0s; }
+.zzz span:nth-child(2) { --x: 24px; --y: -30px; font-size: 18px; animation-delay: 0.9s; }
+.zzz span:nth-child(3) { --x: 44px; --y: -54px; font-size: 24px; animation-delay: 1.8s; }
+.zzz.left span { --flip: -1; }
+@keyframes zzz-rise { from { opacity: 0; transform: translate(0, 0) scale(0.5); } to { opacity: 0.95; transform: translate(calc(var(--x) * var(--flip, 1)), var(--y)) scale(1); } }
 @media (prefers-reduced-motion: reduce) {
+  .zzz span { animation: none; opacity: 0.95; transform: translate(calc(var(--x) * var(--flip, 1)), var(--y)); }
   .webnote, .webnote.out { transition: none; }
   .bubble-pop, .bubble.out .bubble-pop { transition: opacity 0.2s; transform: none; }
 }
