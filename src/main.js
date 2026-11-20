@@ -538,9 +538,10 @@ function heroLook(info) {
   for (const [pose, { file }] of Object.entries(info.poses)) {
     try {
       // From hero.json: where the web ties on (grip), how far he is turned (tilt), where reminder
-      // bubbles point (face, with its radius faceSize), and the hand new webs shoot from (hand).
-      const { grip, tilt, face, faceSize, hand } = info.poseSettings[pose] || {};
-      poses[pose] = { bytes: readBytes(file), file: path.basename(file), grip, tilt, face, faceSize, hand };
+      // bubbles point (face, with its radius faceSize), the hand new webs shoot from (hand), and
+      // which way he heads in the picture (faces: -1 left, 1 right).
+      const { grip, tilt, face, faceSize, hand, faces } = info.poseSettings[pose] || {};
+      poses[pose] = { bytes: readBytes(file), file: path.basename(file), grip, tilt, face, faceSize, hand, faces };
     } catch (err) {
       raiseProblem(`${info.name}: could not load ${path.basename(file)}. ${err.message}`);
     }

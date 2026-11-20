@@ -16,6 +16,8 @@
  *   tilt      degrees to turn the picture, clockwise positive
  *   face      where reminder bubbles point, with faceSize its radius
  *   hand      where every new web shoots from (to the next web, to a reminder); without it, the tie-on point
+ *   faces     "left" or "right": the way he is heading in the picture. Swinging across the screen he is
+ *             mirrored to face the way he goes. Without it, the side his web hand is on decides.
  *   file      a picture in another hero's folder to use for this pose ("../Other hero/hang.webp"), so a
  *             hero can mix poses without copies. It has to stay inside the folder holding the heroes.
  * Points are pixels of the picture, from its top left corner.
@@ -241,7 +243,7 @@ function readSettings(jsonFile, hero) {
   }
 }
 
-/** One pose's settings: { grip, face, hand, tilt, faceSize, file }, each null when not given. */
+/** One pose's settings: { grip, face, hand, tilt, faceSize, faces, file }, each null when not given. */
 function readPose(json) {
   const point = (value) => (Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === 'number')
     ? { x: value[0], y: value[1] } : null);
@@ -252,6 +254,7 @@ function readPose(json) {
     hand: point(points.hand),
     tilt: typeof json.tilt === 'number' ? json.tilt : null,
     faceSize: typeof json.faceSize === 'number' && json.faceSize > 0 ? json.faceSize : null,
+    faces: json.faces === 'left' ? -1 : json.faces === 'right' ? 1 : null,
     file: typeof json.file === 'string' && json.file.trim() ? json.file.trim() : null,
   };
 }

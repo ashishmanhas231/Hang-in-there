@@ -13,6 +13,9 @@
  * His body is turned by this code all the way (rig.steered): in the air, smoothly round from the
  * web he let go of to the one he will catch; on a web, into line with it.
  *
+ * On a long enough flight (every other one) he also somersaults, tucked in: a turn about his middle
+ * that only the drawing shows (spinNow), so the physics and every throw are exactly the same.
+ *
  * Plain JavaScript, no Electron, so the unit tests run it. Positions along the screen (targetX, the
  * webs) are screen units; the rig works in window units, so step() is told where the window's left
  * edge is. Nothing here moves the window: hang-view.js does that.
@@ -76,11 +79,19 @@
   const SHOT_SECONDS = 0.12;
   /** On the last web he is slowed to a swing this big (radians), then hangs as usual. */
   const LAND_ANGLE = 0.2;
+  /**
+   * A somersault: only in a flight at least this long (seconds). It lasts the whole flight, ending
+   * one step before the catch, so it is never cut short; the new web leaves his hand as he comes round.
+   */
+  const FLIP_FLIGHT = 0.25;
   /** Gives up on a flight this long, and on the whole trip. */
   const MAX_FLIGHT = 2;
   const MAX_TRIP = 12;
 
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  /** What spinNow returns: reused, so drawing allocates nothing. */
+  const NO_SPIN = Object.freeze({ angle: 0, tuck: 0 });
+  const SPIN = { angle: 0, tuck: 0 };
   /** a minus b, as an angle between -pi and pi. */
   const turn = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
   /** The angle from straight down (as rig.ropeAngle measures it) of the line from (ax, ay) to (bx, by). */
@@ -224,6 +235,26 @@
       return share > 0 ? { x: f.anchorX - left, y: ANCHOR_Y, share: Math.min(1, share) } : null;
     }
 
+    /**
+     * The somersault now, for drawing: { angle, tuck } (radians about his middle, and 0..1 tucked in).
+     * blend: how far between the last step and the next (stage.blend), so it turns smoothly.
+     */
+    spinNow(blend = 1) {
+      const f = this.flight;
+      if (!f || !f.spin) {
+        return NO_SPIN;
+      }
+      const s = clamp((this.steps - 1 + blend) / f.spinSteps, 0, 1);
+      if (s >= 1) {
+        return NO_SPIN;
+      }
+      // Starts and ends turning gently, tucked in most half way round.
+      const eased = s * s * (3 - 2 * s);
+      SPIN.angle = f.spin * eased;
+      SPIN.tuck = Math.sin(Math.PI * s);
+      return SPIN;
+    }
+
     // ---- The phases ----------------------------------------------------------------------------
 
     swing(left) {
@@ -297,6 +328,12 @@
           rate: share * ropeRate + (1 - share) * from.rate,
         },
       };
+      // Every other flight, if long enough: a somersault, the way his swing was already turning him.
+      const seconds = flight.steps * STEP;
+      if (this.hops % 2 === 0 && seconds >= FLIP_FLIGHT) {
+        this.flight.spin = -this.dir * 2 * Math.PI;
+        this.flight.spinSteps = Math.max(1, flight.steps - 1);
+      }
       this.phase = 'fly';
       this.steps = 0;
       return { type: 'release' };

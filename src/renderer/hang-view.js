@@ -395,6 +395,9 @@
     webshot.advance(frameDt);
     stage.aim = travel ? travel.aim(layout.left) : null;
     stage.blend = accumulator / STEP;
+    const spin = travel ? travel.spinNow(stage.blend) : null;
+    stage.spin = spin ? spin.angle : 0;
+    stage.tuck = spin ? spin.tuck : 0;
     stage.dragging = dragged !== null;
     stage.advance(frameDt);
     draw();
@@ -467,6 +470,9 @@
     travel = new Travel(rig, plan.dir, targetX, rig.ropeTarget || layout.rope);
     travel.begin(layout.left);
     stage.travelling = true;
+    // He turns round to face the way he is going, and springs off: his web snaps taut.
+    stage.facing = plan.dir;
+    stage.jerk(0.6);
     camera = { x: layout.left, v: camera ? camera.v : 0 };
     wake();
   }
@@ -503,19 +509,10 @@
     travel = null;
     stage.travelling = false;
     stage.aim = null;
+    stage.facing = 0; // settled on his web: back to the picture as drawn
+    stage.spin = 0;
+    stage.tuck = 0;
     wake(); // full frame rate a while longer, as after any touch, while he settles
-  }
-
-  /**
-   * Where a double-click sends him: 30 to 60% of the screen across, towards the side with more room.
-   */
-  function doubleClickTarget() {
-    const work = layout.work;
-    const from = layout.left + rig.anchor.x;
-    const dir = from - work.x < work.x + work.width - from ? 1 : -1;
-    const room = dir > 0 ? work.x + work.width * 0.92 - from : from - (work.x + work.width * 0.08);
-    const want = work.width * (0.3 + Math.random() * 0.3);
-    return from + dir * Math.max(0, Math.min(room, want));
   }
 
   /** He has his last web: remember the spot, as dropping the knot there would. */
@@ -1101,7 +1098,7 @@
     endDrag();
     updateHit(local(e));
     if (double) {
-      startTravel(doubleClickTarget());
+      startTravel(); // from one side of the screen to the other
     }
     wake();
   }
@@ -1127,7 +1124,7 @@
   // already started him off; this catches a double-click slower than DOUBLE_CLICK_MS.
   canvas.addEventListener('dblclick', (e) => {
     if (layout && !rig.nearAnchor(local(e))) {
-      startTravel(doubleClickTarget());
+      startTravel();
     }
   });
 

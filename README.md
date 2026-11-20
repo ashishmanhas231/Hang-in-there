@@ -88,13 +88,14 @@ If you drop the web too close to a screen edge, it slides back in just far enoug
 
 ### Web-swinging
 
-**Double-click him** and he swings 30 to 60% of the way across the screen, towards the side with more
-room. **Web-swing to** in his menu sends him **Left**, to the **Center**, **Right**, **Somewhere else**,
+**Double-click him** and he swings from one side of the screen to the other. **Web-swing to** in his menu sends him **Left**, to the **Center**, **Right**, **Somewhere else**,
 to **Where the pointer is** (also ⌃⌥⇧W anywhere) or **Across the screen** to the other side. He goes
 web to web, like Spider-Man between buildings. He leans back, swings forward, lets
 go on the way up and flies through the air; on the way down the next web shoots from his hand and
 catches him, and he swings straight on without losing speed. The trip is split into equal
-hops. The last web is tied at the spot, and he swings to a stop there. The new spot is remembered, so
+hops. He turns to face the way he is going (a hero's hero.json can say which way its picture faces
+with `"faces": "left"` or `"right"`), and on every other long flight he tucks in for a somersault.
+The last web is tied at the spot, and he swings to a stop there. The new spot is remembered, so
 he starts there next time.
 
 - **Grab him** mid-swing to stop: he hangs from the web he has, and that spot is remembered instead.

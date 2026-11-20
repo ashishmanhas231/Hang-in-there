@@ -3,5 +3,5 @@
   // erased (the app draws its own from "grip", his top fist). "face" is where reminder bubbles point;
   // new webs shoot from "hand" (his lower fist).
   "line": "web",
-  "poses": { "hang": { "tilt": -12, "faceSize": 40, "points": { "grip": [408, 34], "face": [333, 214], "hand": [381, 119] } } }
+  "poses": { "hang": { "faces": "left", "tilt": -12, "faceSize": 40, "points": { "grip": [408, 34], "face": [333, 214], "hand": [381, 119] } } }
 }

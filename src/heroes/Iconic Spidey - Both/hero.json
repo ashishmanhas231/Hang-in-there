@@ -5,6 +5,6 @@
   "line": "web",
   "poses": {
     "hang": { "file": "../Iconic Spidey - Upside Down/hang.webp", "faceSize": 62, "points": { "face": [255, 662], "hand": [322, 85] } },
-    "swing": { "file": "../Iconic Spidey - Web Swing/hang.webp", "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185], "hand": [222, 35] } }
+    "swing": { "file": "../Iconic Spidey - Web Swing/hang.webp", "faces": "left", "tilt": -7, "faceSize": 75, "points": { "grip": [330, 518], "face": [290, 185], "hand": [222, 35] } }
   }
 }

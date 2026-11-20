@@ -361,6 +361,73 @@ test('hover reads a pixel only inside the picture, turned as it is drawn', () =>
   assert.equal(reads, 1);
 });
 
+test('a picture knows which way it faces: from hero.json, else from the side of his web hand', () => {
+  const p = fixtures.person([255, 0, 0, 255]); // box 10..190 x 20..390
+  const figure = (hold) => new IM.CustomFigure(IM.measureFigure(p.data, 200, 400, false, 150, 1.3, hold), false, null, 1);
+  assert.equal(figure({ grip: { x: 100, y: 20 }, hand: { x: 20, y: 200 } }).facing, -1, 'hand to the left');
+  assert.equal(figure({ grip: { x: 100, y: 20 }, hand: { x: 180, y: 200 } }).facing, 1, 'hand to the right');
+  assert.equal(figure({ grip: { x: 100, y: 20 }, hand: { x: 102, y: 200 } }).facing, 0, 'hand in the middle: never mirrored');
+  assert.equal(figure({ grip: { x: 100, y: 20 }, hand: { x: 20, y: 200 }, faces: 1 }).facing, 1, 'hero.json wins');
+  assert.equal(figure({}).facing, 0);
+});
+
+test('swinging the other way he is mirrored to face it, turning round edge-on, and turns back after', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  const picture = { ...countingPicture('hang'), facing: 1, handPoint: () => ({ x: 30, y: 40 }), facePoint: () => ({ x: 20, y: 60, r: 10 }) };
+  stage.look = new HeroLook('x', 'web', { hang: picture });
+  const hand = stage.handPoint();
+  stage.facing = 1;
+  stage.advance(1 / 60);
+  assert.equal(stage.mirror, 1, 'already facing that way');
+  stage.facing = -1;
+  const seen = [];
+  for (let i = 0; i < 30; i++) {
+    stage.advance(1 / 60);
+    seen.push(stage.mirror);
+  }
+  assert.equal(stage.mirror, -1);
+  assert.ok(seen.some((m) => Math.abs(m) < 0.15), 'edge-on half way round');
+  assert.ok(seen.indexOf(-1) >= 8 && seen.indexOf(-1) <= 13, `turned round in ${seen.indexOf(-1) + 1} frames`);
+  // His hand and face are mirrored with him, about the line of his body.
+  const mirrored = stage.handPoint();
+  const ankle = stage.at(rig.ankle);
+  const theta = stage.bodyAngle() - Math.PI;
+  const across = (pt) => (pt.x - ankle.x) * Math.cos(theta) + (pt.y - ankle.y) * Math.sin(theta);
+  assert.ok(Math.abs(across(mirrored) + across(hand)) < 1e-9, 'hand on the other side');
+  const ctx = fakeContext();
+  stage.drawBody(ctx);
+  assert.ok(ctx.lastScale[0] < 0, 'drawn mirrored');
+  stage.facing = 0; // settled: back as drawn
+  for (let i = 0; i < 30; i++) stage.advance(1 / 60);
+  assert.equal(stage.mirror, 1);
+  stage.reducedMotion = true;
+  stage.facing = -1;
+  stage.advance(1 / 60);
+  assert.equal(stage.mirror, -1, 'reduced motion: turns at once');
+});
+
+test('a somersault turns him about his middle and tucks him in, and the hover test follows', () => {
+  const rig = mediumRig();
+  const stage = new Stage(rig, null);
+  const p = fixtures.person([255, 0, 0, 255]);
+  const m = IM.measureFigure(p.data, 200, 400, false, 150);
+  stage.look = new HeroLook('x', 'web', { hang: new IM.CustomFigure(m, false, null, 1) });
+  const ankle = stage.at(rig.ankle);
+  const onHim = { x: ankle.x, y: ankle.y + m.box.height * m.scale * 0.5 };
+  const alphaAt = () => 255;
+  assert.equal(stage.hitTest(onHim, alphaAt), true);
+  // Half way round: where he was is empty; the same point turned about his middle is him.
+  stage.spin = Math.PI;
+  stage.tuck = 1;
+  assert.ok(!stage.settled);
+  const c = stage.pivot();
+  assert.equal(stage.hitTest({ x: 2 * c.x - onHim.x, y: 2 * c.y - onHim.y }, alphaAt), true);
+  stage.spin = 0;
+  stage.tuck = 0;
+  assert.ok(stage.settled || stage.mirror === 1);
+});
+
 test('drawing a frame reuses its lists of points: nothing new is allocated as he moves', () => {
   const rig = mediumRig();
   const stage = new Stage(rig, null);
@@ -390,13 +457,14 @@ test('hero.json: comments, trailing commas, grip, tilt and face', () => {
   fs.writeFileSync(path.join(dir, 'hero.json'), `{
     // a comment
     "line": "none", /* another */
-    "poses": { "Hang": { "tilt": -7, "faceSize": 40, "points": { "grip": [1, 2], "face": [3, 4], } } },
+    "poses": { "Hang": { "tilt": -7, "faceSize": 40, "points": { "grip": [1, 2], "face": [3, 4], } }, "swing": { "faces": "left" } },
   }`);
   const hero = heroes.readFolder(dir);
   assert.deepEqual(Object.keys(hero.poses).sort(), ['hang', 'swing']);
   assert.ok(hero.usable);
   assert.equal(hero.line, 'none');
-  assert.deepEqual(hero.poseSettings.hang, { grip: { x: 1, y: 2 }, face: { x: 3, y: 4 }, hand: null, tilt: -7, faceSize: 40, file: null });
+  assert.deepEqual(hero.poseSettings.hang, { grip: { x: 1, y: 2 }, face: { x: 3, y: 4 }, hand: null, tilt: -7, faceSize: 40, faces: null, file: null });
+  assert.equal(hero.poseSettings.swing.faces, -1);
 });
 
 test('hero.json: a pose can borrow a picture from another hero folder, never from outside them', () => {
@@ -443,7 +511,10 @@ test('the heroes ship with the app, each with its face and hand marked', () => {
   assert.equal(both.poses.swing.file, heroes.find('Iconic Spidey - Web Swing').poses.hang.file, 'borrowed, not a copy');
   for (const name of ['Iconic Spidey - Web Swing', 'Iron Spider - Web Swing', 'Animated Spidey - Web Swing', 'Comic Spidey - Web Swing']) {
     assert.ok(heroes.find(name).poseSettings.hang.grip, `${name} is held by his fist`);
+    assert.ok([-1, 1].includes(heroes.find(name).poseSettings.hang.faces), `${name} says which way he faces`);
   }
+  assert.equal(heroes.find('Iron Spider - Web Swing').poseSettings.hang.faces, 1);
+  assert.equal(both.poseSettings.swing.faces, -1);
   assert.equal(heroes.find('nobody'), null);
   assert.equal(heroes.scan(), list, 'read once, then kept');
 });
@@ -846,6 +917,13 @@ function swingAcross(screenW, screenH, body, ropeFraction, startFraction, push =
     t += STEP;
     const event = travel.step(left);
     if (event && event.type === 'release') r.releases.push(t);
+    const flip = travel.spinNow(1);
+    if (flip.angle) {
+      r.flipSteps = (r.flipSteps || 0) + 1;
+      r.flipMost = Math.max(r.flipMost || 0, Math.abs(flip.angle));
+      r.tuckMost = Math.max(r.tuckMost || 0, flip.tuck);
+      r.flipDir = Math.sign(flip.angle);
+    }
     if (event && event.type === 'catch') {
       r.catches.push({ ...event, t });
       r.longestWeb = Math.max(r.longestWeb, rig.ropeLength);
@@ -925,6 +1003,38 @@ test('swinging across is smooth: he never stops between webs, and nothing jerks 
     assert.ok(r.spin < 8, `${label}: body turned at ${(r.spin * 180 / Math.PI).toFixed(0)} degrees a second`);
     assert.ok(r.spinJolt < 150, `${label}: body spin changed at ${(r.spinJolt * 180 / Math.PI).toFixed(0)} degrees a second per second`);
   }
+});
+
+test('swinging across: right to left is the mirror image of left to right', () => {
+  for (const [w, h, body, rope] of [[1470, 920, 150, 0.27], [2560, 1400, 200, 0.42], [1470, 920, 110, 0.15]]) {
+    const right = swingAcross(w, h, body, rope, 0.12);
+    const left = swingAcross(w, h, body, rope, 0.88);
+    const label = `${w}x${h} body ${body} rope ${rope}`;
+    assert.equal(right.plan.dir, 1);
+    assert.equal(left.plan.dir, -1);
+    assert.equal(left.catches.length, right.catches.length, `${label}: webs`);
+    left.catches.forEach((c, i) => {
+      // Mirrored about the middle of the screen, within a pixel and a step.
+      assert.ok(Math.abs((w - c.anchorX) - right.catches[i].anchorX) < 1, `${label}: web ${i} at ${c.anchorX} vs ${right.catches[i].anchorX}`);
+      assert.ok(Math.abs(c.t - right.catches[i].t) < 2 * STEP, `${label}: web ${i} at ${c.t} s vs ${right.catches[i].t} s`);
+    });
+    assert.equal(left.flipDir, -right.flipDir, `${label}: somersaults turn opposite ways`);
+  }
+});
+
+test('swinging across: every other flight he somersaults, once round, tucked in, and done as the next web catches', () => {
+  let flips = 0;
+  for (const [w, h, body, rope, from] of [[1470, 920, 150, 0.27, 0.88], [1920, 1050, 150, 0.27, 0.12], [2560, 1400, 200, 0.42, 0.88]]) {
+    const r = swingAcross(w, h, body, rope, from);
+    const label = `${w}x${h} body ${body} rope ${rope} from ${from}`;
+    if (!r.flipSteps) continue;
+    flips++;
+    assert.ok(r.flipMost > 1.9 * Math.PI && r.flipMost <= 2 * Math.PI + 1e-9, `${label}: turned ${r.flipMost}`);
+    assert.ok(r.tuckMost > 0.95, `${label}: tucked ${r.tuckMost}`);
+    // Forward, the way his swing turned him: going right, anticlockwise on the screen.
+    assert.equal(r.flipDir, -r.plan.dir, label);
+  }
+  assert.ok(flips >= 2, `somersaulted on ${flips} trips`);
 });
 
 test('swinging across: a new web keeps his speed, letting go leaves the old web, and he goes the other way from the right half', () => {

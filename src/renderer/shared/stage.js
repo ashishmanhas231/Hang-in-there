@@ -44,6 +44,10 @@
   const THWIP_FADE = 0.3;
   /** A new web's splat bursts open over this long. */
   const SPLAT_SECONDS = 0.18;
+  /** Turning round to face the other way (a mirror flip, edge-on half way) takes this long. */
+  const FLIP_SECONDS = 0.18;
+  /** Tucked in for a somersault in the air, he is drawn this much smaller at most. */
+  const TUCK = 0.1;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const smooth = (v) => {
     const k = clamp(v, 0, 1);
@@ -130,6 +134,16 @@
       this.splatAge = null;
       /** Just caught: the web's end moving from his shooting hand to where he holds it, { age }, or null. */
       this.handover = null;
+      /**
+       * The way he should face (-1 left, 1 right), or 0 for the picture as drawn. Set by the page
+       * while he swings across the screen. `mirror` is how he is drawn across (1 as drawn, -1
+       * mirrored), passing through 0 (edge-on) as he turns round.
+       */
+      this.facing = 0;
+      this.mirror = 1;
+      /** A somersault in the air (from travel.js): extra turn (radians) about his middle, and how tucked in (0..1). */
+      this.spin = 0;
+      this.tuck = 0;
     }
 
     get look() {
@@ -153,7 +167,14 @@
     get settled() {
       return Math.abs(this.armOffset) < 0.002 && this.snap === null && this.candidate === null &&
         this.letGo === null && this.aim === null && this.handover === null && this.stretch === null && this.splatAge === null &&
-        Math.abs(this.sway) < 0.0015 && Math.abs(this.swayV) < 0.01 && this.tether === null;
+        Math.abs(this.sway) < 0.0015 && Math.abs(this.swayV) < 0.01 && this.tether === null &&
+        this.mirror === this.mirrorTarget() && this.spin === 0 && this.tuck === 0;
+    }
+
+    /** How the shown picture should be drawn across: mirrored (-1) when it heads the other way from `facing`. */
+    mirrorTarget() {
+      const natural = this.lookValue && this.shown ? this.shown.facing || 0 : 0;
+      return this.facing && natural && this.facing !== natural ? -1 : 1;
     }
 
     /** The web snapped taut (a push, a drag let go, a new web caught): a short stretch, 0..1 strong. */
@@ -205,6 +226,35 @@
       this.sway = 0;
       this.swayV = 0;
       this.stretch = null;
+      this.facing = 0;
+      this.mirror = 1;
+      this.spin = 0;
+      this.tuck = 0;
+    }
+
+    /** His middle, about which a somersault turns him (window units). */
+    pivot() {
+      const ankle = this.at(this.rig.ankle);
+      const head = this.at(this.rig.head);
+      return { x: (ankle.x + head.x) / 2, y: (ankle.y + head.y) / 2 };
+    }
+
+    /** A window point turned by `angle` about his middle. */
+    spun(p, angle) {
+      if (!angle) {
+        return p;
+      }
+      const c = this.pivot();
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const dx = p.x - c.x;
+      const dy = p.y - c.y;
+      return { ...p, x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos };
+    }
+
+    /** How the picture is drawn across (mirror) and along, scale aside: never quite 0, so it can be undone. */
+    across() {
+      return Math.abs(this.mirror) < 0.02 ? (this.mirror < 0 ? -0.02 : 0.02) : this.mirror;
     }
 
     /** Arm lag and pose changes. Call once per drawn frame. */
@@ -265,6 +315,11 @@
         }
       }
       this.updatePose(frameDt);
+      const mirrorTo = this.mirrorTarget();
+      if (this.mirror !== mirrorTo) {
+        const most = this.reducedMotion ? 2 : (2 * frameDt) / FLIP_SECONDS;
+        this.mirror = Math.abs(mirrorTo - this.mirror) <= most ? mirrorTo : this.mirror + Math.sign(mirrorTo - this.mirror) * most;
+      }
       if (this.letGo) {
         this.letGo.age += frameDt;
         if (this.letGo.age >= LET_GO_SECONDS) {
@@ -391,7 +446,10 @@
       const turn = this.bodyAngle() - Math.PI + this.sway;
       const c = Math.cos(turn);
       const s = Math.sin(turn);
-      return { x: ankle.x + local.x * c - local.y * s, y: ankle.y + local.x * s + local.y * c };
+      const shrink = 1 - TUCK * this.tuck;
+      const x = local.x * this.mirror * shrink;
+      const y = local.y * shrink;
+      return this.spun({ x: ankle.x + x * c - y * s, y: ankle.y + x * s + y * c }, this.spin);
     }
 
     draw(ctx) {
@@ -446,14 +504,23 @@
       const theta = this.bodyAngle();
       const ankle = this.at(this.rig.ankle);
       ctx.save();
+      if (this.spin && this.lookValue) {
+        const c = this.pivot();
+        ctx.translate(c.x, c.y);
+        ctx.rotate(this.spin);
+        ctx.translate(-c.x, -c.y);
+      }
       ctx.translate(ankle.x, ankle.y);
       if (this.lookValue) {
         // A picture hangs from its top edge, so it needs 180 degrees less turn than the upright drawing.
         ctx.rotate(theta - Math.PI + this.sway);
         const { picture, scale } = this.pictureNow();
+        const size = scale * (1 - TUCK * this.tuck);
         const along = this.stretchNow();
-        if (scale !== 1 || along !== 1) {
-          ctx.scale(scale, scale * along);
+        // Mirrored about the line of his body, so he faces the way he swings.
+        const across = this.mirror;
+        if (size !== 1 || along !== 1 || across !== 1) {
+          ctx.scale(size * across, size * along);
         }
         if (picture) {
           picture.draw(ctx, 1);
@@ -471,11 +538,12 @@
     pictureLocal(pt) {
       const ankle = this.at(this.rig.ankle);
       const turn = -(this.bodyAngle() - Math.PI + this.sway);
-      const { scale } = this.pictureNow();
-      const dx = pt.x - ankle.x;
-      const dy = pt.y - ankle.y;
+      const scale = this.pictureNow().scale * (1 - TUCK * this.tuck);
+      const p = this.spun(pt, -this.spin);
+      const dx = p.x - ankle.x;
+      const dy = p.y - ankle.y;
       return {
-        x: (dx * Math.cos(turn) - dy * Math.sin(turn)) / scale,
+        x: (dx * Math.cos(turn) - dy * Math.sin(turn)) / (scale * this.across()),
         y: (dx * Math.sin(turn) + dy * Math.cos(turn)) / (scale * this.stretchNow()),
       };
     }
@@ -866,7 +934,7 @@
   /**
    * Builds the look the main process sent:
    *   { kind: 'drawn' }
-   *   { kind: 'hero', name, line, poses: { pose: { bytes, file, grip, tilt, face, faceSize, hand } } }
+   *   { kind: 'hero', name, line, poses: { pose: { bytes, file, grip, tilt, face, faceSize, hand, faces } } }
    * Resolves a HeroLook, or null for the drawn figure. Anything that fails is reported through
    * problem(message) and falls back to the drawn figure.
    */
@@ -879,7 +947,8 @@
       try {
         loaded[pose] = await IMAGES.CustomFigure.load(picture.bytes, false, bodyLength, pixelsPerDip, 1.3,
           { grip: picture.grip || null, tilt: typeof picture.tilt === 'number' ? picture.tilt : null,
-            face: picture.face || null, faceSize: picture.faceSize || null, hand: picture.hand || null });
+            face: picture.face || null, faceSize: picture.faceSize || null, hand: picture.hand || null,
+            faces: picture.faces === -1 || picture.faces === 1 ? picture.faces : null });
       } catch (err) {
         problem(`${look.name}: could not load ${picture.file}. ${err.message}`);
       }

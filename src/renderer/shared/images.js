@@ -139,7 +139,7 @@
     scale = Math.min(scale, (bodyLength * heightShare * 0.85) / box.width);
     return {
       box, attachX, attachY, balanceDegrees, scale, gripped: Boolean(hold.grip),
-      face: hold.face || null, faceSize: hold.faceSize || null, hand: hold.hand || null,
+      face: hold.face || null, faceSize: hold.faceSize || null, hand: hold.hand || null, faces: hold.faces || null,
     };
   }
 
@@ -159,6 +159,15 @@
       this.face = measure.face ? { ...local(measure.face), r: (measure.faceSize || 0) * measure.scale } : null;
       /** The hand new webs shoot from. */
       this.hand = local(measure.hand);
+      /**
+       * The way he heads in the picture as drawn: -1 left, 1 right, 0 unknown (never mirrored).
+       * hero.json "faces" says; otherwise he reaches ahead with his web hand, so its side decides.
+       */
+      this.facing = measure.faces || 0;
+      if (!this.facing && this.hand) {
+        const hand = this.turned(this.hand);
+        this.facing = Math.abs(hand.x) > this.size.x * 0.08 ? Math.sign(hand.x) : 0;
+      }
     }
 
     /** A point of the picture turned the way draw() turns it (or back, with direction -1). */

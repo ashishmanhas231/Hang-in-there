@@ -7,7 +7,7 @@
   "desktopName": "spidey-hang.desktop",
   "private": true,
   "license": "MIT",
-  "author": "Ashish Manhas",
+  "author": "Sarthak Sharma",
   "homepage": "https://github.com/ashishmanhas231/Hang-in-there#readme",
   "repository": {
     "type": "git",
@@ -31,7 +31,7 @@
   "build": {
     "appId": "com.spideyhang.app",
     "productName": "Spidey Hang",
-    "copyright": "Copyright (c) Ashish Manhas",
+    "copyright": "Copyright (c) Sarthak Sharma",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -98,7 +98,7 @@
       ],
       "icon": "build/icon.png",
       "category": "Utility",
-      "maintainer": "Ashish Manhas",
+      "maintainer": "Sarthak Sharma",
       "synopsis": "Spider-Man hangs from a web on your desktop",
       "executableArgs": [
         "--ozone-platform=x11"
