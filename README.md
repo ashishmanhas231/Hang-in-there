@@ -41,7 +41,7 @@ notarized, so the first time you open it, right-click the app and choose **Open*
 Install the `.deb` by double-clicking it (it opens in App Center), or from a terminal:
 
 ```bash
-sudo apt install ./spidey-hang_1.0.0_amd64.deb
+sudo apt install ./spidey-hang_1.1.0_amd64.deb
 ```
 
 Then start **Spidey Hang** from the app grid. It is built for Ubuntu 22.04 and newer (64-bit Intel/AMD);

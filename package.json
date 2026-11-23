@@ -1,7 +1,7 @@
 {
   "name": "spidey-hang",
   "productName": "Spidey Hang",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Spider-Man hangs upside down from a web on your desktop (Windows, macOS and Linux). Drag him and he swings.",
   "main": "src/main.js",
   "desktopName": "spidey-hang.desktop",
