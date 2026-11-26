@@ -171,15 +171,23 @@ async function main() {
     });
 
     await check('antics: wiggle, bungee, swing, a line in his bubble, a short web-hop', async () => {
-      // Nothing else going on: an antic is skipped while a bubble shows or he is still on his way.
-      await ipc.send('dismiss');
-      await sleep(2500);
-      for (const kind of ['wiggle', 'bungee', 'swing']) {
+      // An antic is skipped while a bubble shows or he is still on his way. With reduced motion (GitHub's
+      // macOS and Windows runners) the last check's glide keeps his window moving for a few seconds after
+      // he has landed, and longer on a slow machine: a frame counts for at most 0.05 s, so under 20 frames
+      // a second the glide runs slower than the clock. So each antic is asked for again while he is busy,
+      // and must run within the time allowed.
+      const anticRuns = (kind) => waitFor(`antic ${kind} to run, not be skipped`, async () => {
+        const from = logText().length;
         await ipc.send(`antic ${kind}`);
-        await logHas(new RegExp(`Antic: ${kind}`));
-        await sleep(kind === 'bungee' ? 2600 : 900);
+        await waitFor(`log line Antic: ${kind}`, () => logText().slice(from).includes(`Antic: ${kind}`));
+        await sleep(600); // time for the page to say it skipped it
+        return !logText().slice(from).includes(`Antic ${kind} skipped`);
+      }, 15000);
+      await ipc.send('dismiss');
+      for (const kind of ['wiggle', 'bungee', 'swing']) {
+        await anticRuns(kind);
+        await sleep(kind === 'bungee' ? 2600 : 300);
       }
-      assert.doesNotMatch(logText(), /Antic (wiggle|bungee|swing) skipped/);
       const bubbles = (logText().match(/Reminder shown \(bubble\)/g) || []).length;
       await ipc.send('antic say');
       await waitFor('his line', () => (logText().match(/Reminder shown \(bubble\)/g) || []).length > bubbles);
